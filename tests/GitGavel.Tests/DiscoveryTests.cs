@@ -6,6 +6,7 @@ namespace GitGavel.Tests;
 
 public class DiscoveryTests
 {
+
     [Fact]
     public void SarifParser_WithValidSarifJson_ParsesFindings()
     {

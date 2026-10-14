@@ -5,6 +5,9 @@ using GitGavel.Discovery;
 using GitGavel.System2;
 using GitGavel.System2.Abstractions;
 using GitGavel.System2.Providers;
+using GitGavel.System1.Abstractions;
+using GitGavel.System1.Engines;
+using GitGavel.System1.Models;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -139,6 +142,71 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         AnsiConsole.Write(findingsTable);
         AnsiConsole.WriteLine();
+
+        // 3. System 1 Jev Decision Engine (Triage Gatekeeper)
+        ITriageEngine triageEngine = settings.UseMock || config.Triage.Engine == "llm-synthesizer"
+            ? new MockTriageEngine()
+            : new TypeSafeJevEngine();
+
+        List<TriageDecision> triageDecisions = null!;
+
+        await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots12)
+            .StartAsync("Executing System 1 Jev Decision Engine (Noul dedupe, Score calibration, Choice routing)...", async ctx =>
+            {
+                triageDecisions = await triageEngine.TriageAllAsync(orchestrationResult.AllFindings, [], config, cancellationToken);
+            });
+
+        AnsiConsole.MarkupLine("[bold cyan]⚖️ Jev Decision Engine Triage Results[/]\n");
+
+        var triageTable = new Table().Border(TableBorder.Rounded);
+        triageTable.AddColumn("[bold]#[/]");
+        triageTable.AddColumn("[bold]Priority[/]");
+        triageTable.AddColumn("[bold]Jev Score[/]");
+        triageTable.AddColumn("[bold]Target Column[/]");
+        triageTable.AddColumn("[bold]Action / Status[/]");
+        triageTable.AddColumn("[bold]Title[/]");
+        triageTable.AddColumn("[bold]Triage Reason[/]");
+
+        for (var i = 0; i < triageDecisions.Count; i++)
+        {
+            var d = triageDecisions[i];
+            var prioColor = d.PriorityLabel switch
+            {
+                "P0" => "bold red",
+                "P1" => "red",
+                "P2" => "yellow",
+                _ => "grey"
+            };
+
+            var statusColor = d.Status switch
+            {
+                TriageStatus.AcceptedToBacklog => "green bold",
+                TriageStatus.RoutedToHumanReview => "cyan",
+                TriageStatus.SuppressedDuplicate => "yellow",
+                _ => "grey"
+            };
+
+            triageTable.AddRow(
+                (i + 1).ToString(),
+                $"[{prioColor}]{d.PriorityLabel}[/]",
+                $"{d.JevScore:F1}/5.0",
+                $"[bold]{d.TargetColumn}[/]",
+                $"[{statusColor}]{d.Status}[/]",
+                Markup.Escape(d.Finding.Title),
+                Markup.Escape(d.Reason)
+            );
+        }
+
+        AnsiConsole.Write(triageTable);
+        AnsiConsole.WriteLine();
+
+        var acceptedCount = triageDecisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog);
+        var reviewCount = triageDecisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview);
+        var dupCount = triageDecisions.Count(d => d.Status == TriageStatus.SuppressedDuplicate);
+        var noiseCount = triageDecisions.Count(d => d.Status == TriageStatus.DiscardedNoise);
+
+        AnsiConsole.MarkupLine($"[bold]Triage Summary:[/] [green]{acceptedCount} Accepted to Backlog[/] | [cyan]{reviewCount} Routed to Review[/] | [yellow]{dupCount} Duplicates Suppressed[/] | [grey]{noiseCount} Discarded[/]\n");
 
         return 0;
     }
