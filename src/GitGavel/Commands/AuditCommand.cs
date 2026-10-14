@@ -8,6 +8,7 @@ using GitGavel.System2.Providers;
 using GitGavel.System1.Abstractions;
 using GitGavel.System1.Engines;
 using GitGavel.System1.Models;
+using GitGavel.Reporting;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -38,6 +39,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
     {
+        var startTime = DateTime.UtcNow;
+
         AnsiConsole.Write(
             new FigletText("GitGavel")
                 .Color(Color.Cyan1));
@@ -45,6 +48,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.MarkupLine("[bold grey]Multi-Agent AI Repo Auditor & Backlog Sentinel[/]\n");
 
         var repoDir = Path.GetFullPath(settings.RepoDirectory);
+        var (commitSha, branch) = GitMetadataHelper.GetGitMetadata(repoDir);
         var configPath = Path.IsPathRooted(settings.ConfigPath)
             ? settings.ConfigPath
             : Path.Combine(repoDir, settings.ConfigPath);
@@ -207,6 +211,30 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         var noiseCount = triageDecisions.Count(d => d.Status == TriageStatus.DiscardedNoise);
 
         AnsiConsole.MarkupLine($"[bold]Triage Summary:[/] [green]{acceptedCount} Accepted to Backlog[/] | [cyan]{reviewCount} Routed to Review[/] | [yellow]{dupCount} Duplicates Suppressed[/] | [grey]{noiseCount} Discarded[/]\n");
+
+        // 4. Developer Reporting Engine
+        var reportCtx = new ReportContext
+        {
+            Config = config,
+            RepoContext = repoContext,
+            Orchestration = orchestrationResult,
+            TriageDecisions = triageDecisions,
+            StartTimeUtc = startTime,
+            EndTimeUtc = DateTime.UtcNow,
+            GitCommitSha = commitSha,
+            GitBranch = branch
+        };
+
+        var reportingEngine = new ReportingEngine();
+        var generatedReports = await reportingEngine.GenerateReportsAsync(reportCtx, cancellationToken);
+
+        AnsiConsole.MarkupLine("[bold green]📁 Developer Reports Generated[/]\n");
+        foreach (var reportFile in generatedReports)
+        {
+            var relPath = Path.GetRelativePath(repoDir, reportFile);
+            AnsiConsole.MarkupLine($"  [green]✓[/] [cyan]{Markup.Escape(relPath)}[/]");
+        }
+        AnsiConsole.WriteLine();
 
         return 0;
     }

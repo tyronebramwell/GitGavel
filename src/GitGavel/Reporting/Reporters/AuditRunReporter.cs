@@ -1,0 +1,74 @@
+using System.Text;
+using GitGavel.System1.Models;
+
+namespace GitGavel.Reporting.Reporters;
+
+public static class AuditRunReporter
+{
+    public static string Generate(ReportContext ctx)
+    {
+        var sb = new StringBuilder();
+
+        sb.AppendLine("# GitGavel Audit Run Log");
+        sb.AppendLine();
+        sb.AppendLine($"> Generated at **{ctx.EndTimeUtc:yyyy-MM-dd HH:mm:ss} UTC** | Commit: `{ctx.GitCommitSha}` | Branch: `{ctx.GitBranch}`");
+        sb.AppendLine();
+
+        // 1. Execution Metrics
+        sb.AppendLine("## 1. Execution Metrics");
+        sb.AppendLine();
+        sb.AppendLine("| Metric | Value |");
+        sb.AppendLine("| :--- | :--- |");
+        sb.AppendLine($"| **Start Time (UTC)** | `{ctx.StartTimeUtc:yyyy-MM-dd HH:mm:ss}` |");
+        sb.AppendLine($"| **End Time (UTC)** | `{ctx.EndTimeUtc:yyyy-MM-dd HH:mm:ss}` |");
+        sb.AppendLine($"| **Total Duration** | `{ctx.Duration.TotalSeconds:F2} seconds` |");
+        sb.AppendLine($"| **Git Commit SHA** | `{ctx.GitCommitSha}` |");
+        sb.AppendLine($"| **Git Branch** | `{ctx.GitBranch}` |");
+        sb.AppendLine();
+
+        // 2. Scope Scanned
+        sb.AppendLine("## 2. Scope Scanned");
+        sb.AppendLine();
+        sb.AppendLine("| Scope Category | Count / Volume |");
+        sb.AppendLine("| :--- | :--- |");
+        sb.AppendLine($"| **Specification Files** | {ctx.RepoContext.SpecFiles.Count} files |");
+        sb.AppendLine($"| **Source Code Files** | {ctx.RepoContext.SourceFiles.Count} files |");
+        sb.AppendLine($"| **Total Lines of Code** | {ctx.RepoContext.TotalLinesOfCode:N0} LOC |");
+        sb.AppendLine($"| **SARIF Reports Ingested** | {ctx.RepoContext.SarifFindings.Count} findings |");
+        sb.AppendLine();
+
+        // 3. System 2 Agent Diagnostics
+        sb.AppendLine("## 3. System 2 Generative Subagent Diagnostics");
+        sb.AppendLine();
+        sb.AppendLine("| Agent Name | Findings | Prompt Tokens | Completion Tokens | Total Tokens | Latency |");
+        sb.AppendLine("| :--- | :--- | :--- | :--- | :--- | :--- |");
+
+        foreach (var agent in ctx.Orchestration.SubagentResults)
+        {
+            var status = agent.IsSuccess ? $"{agent.Findings.Count} findings" : "❌ Error: " + agent.ErrorMessage;
+            sb.AppendLine($"| **{agent.AgentName}** | {status} | {agent.PromptTokens:N0} | {agent.CompletionTokens:N0} | {agent.TotalTokens:N0} | {agent.DurationMs}ms |");
+        }
+
+        sb.AppendLine($"| **TOTAL** | **{ctx.Orchestration.AllFindings.Count} findings** | **{ctx.Orchestration.TotalPromptTokens:N0}** | **{ctx.Orchestration.TotalCompletionTokens:N0}** | **{ctx.Orchestration.TotalTokens:N0}** | **{ctx.Orchestration.TotalDurationMs}ms** |");
+        sb.AppendLine();
+
+        // 4. System 1 Jev Triage Statistics
+        var accepted = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog);
+        var humanReview = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview);
+        var duplicates = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.SuppressedDuplicate);
+        var noise = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.DiscardedNoise);
+
+        sb.AppendLine("## 4. System 1 Jev Triage Funnel Statistics");
+        sb.AppendLine();
+        sb.AppendLine("| Triage Outcome | Count | Description |");
+        sb.AppendLine("| :--- | :--- | :--- |");
+        sb.AppendLine($"| **Evaluated Candidates** | {ctx.TriageDecisions.Count} | Total findings analyzed through Jev |");
+        sb.AppendLine($"| **Accepted to Backlog** | **{accepted}** | High-confidence novel findings queued for GitHub Projects Backlog |");
+        sb.AppendLine($"| **Routed to AI Triage Review** | **{humanReview}** | Borderline findings or potential duplicate matches |");
+        sb.AppendLine($"| **Suppressed Duplicates** | **{duplicates}** | Pairwise duplicates rejected via Jev `Noul` |");
+        sb.AppendLine($"| **Suppressed Noise / Hallucinations** | **{noise}** | Low-confidence or subjective items discarded via Jev `Choice` |");
+        sb.AppendLine();
+
+        return sb.ToString();
+    }
+}
