@@ -1,0 +1,28 @@
+name: "GitGavel AI Repo Auditor"
+description: "Multi-Agent AI Repo Auditor & Backlog Sentinel powered by hybrid System 1 (Jev) + System 2 (Generative LLMs)."
+author: "Tyrone Bramwell"
+branding:
+  icon: "check-circle"
+  color: "blue"
+
+inputs:
+  config_path:
+    description: "Path to .gitgavel.yml configuration file"
+    required: false
+    default: ".gitgavel.yml"
+  dry_run:
+    description: "Perform audit without modifying GitHub issues or projects"
+    required: false
+    default: "false"
+  mock:
+    description: "Run in offline mock mode"
+    required: false
+    default: "false"
+
+runs:
+  using: "docker"
+  image: "Dockerfile"
+  args:
+    - "audit"
+    - "--config"
+    - "${{ inputs.config_path }}"

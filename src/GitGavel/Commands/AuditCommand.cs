@@ -9,6 +9,7 @@ using GitGavel.System1.Abstractions;
 using GitGavel.System1.Engines;
 using GitGavel.System1.Models;
 using GitGavel.Reporting;
+using GitGavel.GitHub;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -147,6 +148,19 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.Write(findingsTable);
         AnsiConsole.WriteLine();
 
+        var (owner, repo) = GitHubService.ResolveRepoCoordinates(repoDir);
+        IGitHubService gitHubService = settings.UseMock || settings.DryRun
+            ? new MockGitHubService()
+            : new GitHubService();
+
+        List<ExistingIssue> existingIssues = [];
+        await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"Fetching existing issues from {owner}/{repo} for deduplication...", async ctx =>
+            {
+                existingIssues = await gitHubService.GetExistingIssuesAsync(owner, repo, cancellationToken);
+            });
+
         // 3. System 1 Jev Decision Engine (Triage Gatekeeper)
         ITriageEngine triageEngine = settings.UseMock || config.Triage.Engine == "llm-synthesizer"
             ? new MockTriageEngine()
@@ -158,7 +172,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             .Spinner(Spinner.Known.Dots12)
             .StartAsync("Executing System 1 Jev Decision Engine (Noul dedupe, Score calibration, Choice routing)...", async ctx =>
             {
-                triageDecisions = await triageEngine.TriageAllAsync(orchestrationResult.AllFindings, [], config, cancellationToken);
+                triageDecisions = await triageEngine.TriageAllAsync(orchestrationResult.AllFindings, existingIssues, config, cancellationToken);
             });
 
         AnsiConsole.MarkupLine("[bold cyan]⚖️ Jev Decision Engine Triage Results[/]\n");
@@ -212,7 +226,34 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         AnsiConsole.MarkupLine($"[bold]Triage Summary:[/] [green]{acceptedCount} Accepted to Backlog[/] | [cyan]{reviewCount} Routed to Review[/] | [yellow]{dupCount} Duplicates Suppressed[/] | [grey]{noiseCount} Discarded[/]\n");
 
-        // 4. Developer Reporting Engine
+        // 4. GitHub Issue & Projects v2 Publishing
+        var actionable = triageDecisions
+            .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview)
+            .ToList();
+
+        if (actionable.Count > 0)
+        {
+            if (settings.DryRun)
+            {
+                AnsiConsole.MarkupLine("[bold yellow]⚡ Dry Run Mode:[/] Skipping GitHub issue creation and Project v2 column mutations.\n");
+            }
+            else
+            {
+                await AnsiConsole.Status()
+                    .Spinner(Spinner.Known.Aesthetic)
+                    .StartAsync($"Publishing {actionable.Count} issues to GitHub ({owner}/{repo}) and updating Projects v2...", async ctx =>
+                    {
+                        foreach (var d in actionable)
+                        {
+                            var created = await gitHubService.CreateOrUpdateIssueAsync(owner, repo, d, config, cancellationToken);
+                            await gitHubService.AssignToProjectV2Async(owner, repo, created, d, config, cancellationToken);
+                        }
+                    });
+                AnsiConsole.MarkupLine($"[bold green]✓[/] Published [cyan]{actionable.Count}[/] issues to GitHub ([bold]{owner}/{repo}[/]) and synced to Projects v2.\n");
+            }
+        }
+
+        // 5. Developer Reporting Engine
         var reportCtx = new ReportContext
         {
             Config = config,

@@ -1,0 +1,35 @@
+name: "Weekly AI Backlog Audit"
+
+on:
+  schedule:
+    - cron: '0 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+  repository-projects: write
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Run GitGavel Auditor
+        uses: ./
+        with:
+          config_path: .gitgavel.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
+
+      - name: Upload Audit Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitgavel-audit-reports
+          path: ./reports/
+          retention-days: 30
