@@ -1,0 +1,63 @@
+version: 1
+scope:
+  specs:
+    include:
+    - docs/**/*.md
+    - specs/**/*.md
+    - api/openapi.json
+  source:
+    include:
+    - '**/*.cs'
+    - '**/*.ts'
+    - '**/*.py'
+    exclude:
+    - '**/bin/**'
+    - '**/obj/**'
+    - '**/*.Tests/**'
+    - '**/.git/**'
+subagents:
+  specDrift:
+    enabled: true
+    provider: gemini
+    model: gemini-1.5-pro
+  security:
+    sarifReports:
+    - reports/semgrep.sarif
+    enabled: true
+    provider: gemini
+    model: gemini-1.5-pro
+  refactoring:
+    enabled: true
+    provider: gemini
+    model: gemini-1.5-flash
+triage:
+  engine: jev
+  jev:
+    apiKeyEnv: JEV_API_KEY
+    thresholds:
+      autoBacklogConfidence: 0.85
+      humanReviewConfidence: 0.5
+    dedupeWithNoul: true
+  maxIssuesPerRun: 4
+reporting:
+  outputDir: ./reports
+  githubStepSummary: true
+  formats:
+  - markdown
+  - json
+  reports:
+    auditRun: true
+    tickets: true
+    security: true
+    codeQuality: true
+github:
+  labels:
+  - ai-backlog
+  projectsV2:
+    enabled: true
+    projectNumber: 2
+    columns:
+      backlog: Backlog
+      humanReview: AI Triage
+    fields:
+      priority: Priority
