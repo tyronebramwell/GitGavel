@@ -1,5 +1,23 @@
-﻿
+
 Microsoft Visual Studio Solution File, Format Version 12.00
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution Items", "{D67BC336-70A5-4DE8-8D88-AC017DDF0C51}"
+	ProjectSection(SolutionItems) = preProject
+		.gitgavel.yml = .gitgavel.yml
+		.gitgavel.yml.example = .gitgavel.yml.example
+		gitgavel.example.yml = gitgavel.example.yml
+		SPECIFICATION.md = SPECIFICATION.md
+		Dockerfile = Dockerfile
+		action.yml = action.yml
+		.gitignore = .gitignore
+	EndProjectSection
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{4E75DC08-FBF7-402E-A795-B6BCF0AC79E0}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{1DE9BA47-0628-40C9-A0A6-9280E1BA5EE5}"
+	ProjectSection(SolutionItems) = preProject
+		.github\workflows\audit.yml = .github\workflows\audit.yml
+	EndProjectSection
+EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "GitGavel", "src\GitGavel\GitGavel.csproj", "{B94F8A19-53EE-4745-A19E-79E3CF4DFB2B}"
@@ -49,5 +67,6 @@ Global
 	GlobalSection(NestedProjects) = preSolution
 		{B94F8A19-53EE-4745-A19E-79E3CF4DFB2B} = {827E0CD3-B72D-47B6-A68D-7590B98EB39B}
 		{5B50A245-746E-4E1D-90C7-F37D61182BFC} = {0AB3BF05-4346-4AA6-1389-037BE0695223}
+		{1DE9BA47-0628-40C9-A0A6-9280E1BA5EE5} = {4E75DC08-FBF7-402E-A795-B6BCF0AC79E0}
 	EndGlobalSection
 EndGlobal
