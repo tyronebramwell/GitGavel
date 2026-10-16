@@ -38,14 +38,35 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
             return 1;
         }
 
+        var dir = Path.GetDirectoryName(Path.GetFullPath(settings.ConfigPath));
+        DotEnvLoader.Load(dir);
+
         var envTable = new Table().Border(TableBorder.Rounded);
-        envTable.AddColumn("[bold]Variable[/]");
+        envTable.AddColumn("[bold]Variable / Setting[/]");
         envTable.AddColumn("[bold]Purpose[/]");
         envTable.AddColumn("[bold]Status[/]");
 
-        CheckEnv(envTable, "AI_API_KEY", "Generative LLM subagents (Gemini/Claude)", false);
-        CheckEnv(envTable, config.Triage.Jev.ApiKeyEnv, "Jev Decision Engine (Noul, Score, Choice)", config.Triage.Engine == "jev");
-        CheckEnv(envTable, "GITHUB_TOKEN", "GitHub Issues and Projects v2 integration", true);
+        // 1. LLM Key Check
+        var llmKey = KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
+        var llmStatus = !string.IsNullOrWhiteSpace(llmKey)
+            ? "[green]Configured[/]"
+            : "[red]Missing (Required)[/]";
+        var llmLabel = !string.IsNullOrWhiteSpace(config.Subagents.ApiKey) ? "subagents.apiKey" : config.Subagents.ApiKeyEnv;
+        envTable.AddRow(llmLabel, "Generative LLM subagents (Gemini/Claude)", llmStatus);
+
+        // 2. Jev Key Check
+        var jevKey = KeyResolver.Resolve(config.Triage.Jev.ApiKey, config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
+        var jevStatus = !string.IsNullOrWhiteSpace(jevKey)
+            ? "[green]Configured[/]"
+            : config.Triage.Engine == "jev" ? "[red]Missing (Required)[/]" : "[yellow]Not Set (Optional)[/]";
+        var jevLabel = !string.IsNullOrWhiteSpace(config.Triage.Jev.ApiKey) ? "triage.jev.apiKey" :
+            KeyResolver.IsRawKey(config.Triage.Jev.ApiKeyEnv) ? "triage.jev.apiKeyEnv (direct key)" : config.Triage.Jev.ApiKeyEnv;
+        envTable.AddRow(jevLabel, "Jev Decision Engine (Noul, Score, Choice)", jevStatus);
+
+        // 3. GitHub Token Check
+        var ghToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        var ghStatus = !string.IsNullOrWhiteSpace(ghToken) ? "[green]Configured[/]" : "[red]Missing (Required)[/]";
+        envTable.AddRow("GITHUB_TOKEN", "GitHub Issues and Projects v2 integration", ghStatus);
 
         AnsiConsole.Write(envTable);
         return 0;

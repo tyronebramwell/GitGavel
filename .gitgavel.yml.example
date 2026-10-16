@@ -10,19 +10,21 @@ scope:
 
 # System 2 Subagents (Generative LLMs)
 subagents:
+  apiKeyEnv: "AI_API_KEY" # Env var holding your LLM key (e.g. AI_API_KEY or GEMINI_API_KEY)
+  # apiKey: "your-api-key-here" # Or set directly for local dev (omit in git repos)
   specDrift:
     enabled: true
     provider: "gemini"
-    model: "gemini-1.5-pro"
+    model: "gemini-2.5-pro"
   security:
     enabled: true
     provider: "gemini"
-    model: "gemini-1.5-pro"
+    model: "gemini-2.5-pro"
     sarifReports: ["reports/semgrep.sarif"]
   refactoring:
     enabled: true
     provider: "gemini"
-    model: "gemini-1.5-flash"
+    model: "gemini-2.5-flash"
 
 # System 1 Triage Gatekeeper (Jev Decision Engine)
 triage:
