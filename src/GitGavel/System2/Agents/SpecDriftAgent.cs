@@ -12,7 +12,7 @@ public class SpecDriftAgent : ISubagent
 
     public string Name => "SpecDriftAgent";
 
-    public SpecDriftAgent(ILlmClient llmClient, string model = "gemini-1.5-pro")
+    public SpecDriftAgent(ILlmClient llmClient, string model = "gemini-2.5-pro")
     {
         _llmClient = llmClient;
         _model = model;

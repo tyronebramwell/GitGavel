@@ -12,7 +12,7 @@ public class RefactoringAgent : ISubagent
 
     public string Name => "RefactoringAgent";
 
-    public RefactoringAgent(ILlmClient llmClient, string model = "gemini-1.5-flash")
+    public RefactoringAgent(ILlmClient llmClient, string model = "gemini-2.5-flash")
     {
         _llmClient = llmClient;
         _model = model;

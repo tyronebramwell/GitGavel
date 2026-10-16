@@ -129,4 +129,31 @@ public class System2Tests
         result.TotalPromptTokens.Should().Be(150);
         result.TotalCompletionTokens.Should().Be(90);
     }
+
+    [Fact]
+    public async Task MockLlmClient_GeneratesRealisticFindingsPerAgent()
+    {
+        var client = new MockLlmClient();
+
+        var specResp = await client.GenerateAsync(new LlmRequest
+        {
+            Prompt = "You are the Spec Drift Agent. Compare specifications...",
+            Model = "gemini-2.5-pro"
+        });
+        specResp.Content.Should().Contain("SPECIFICATION.md");
+
+        var secResp = await client.GenerateAsync(new LlmRequest
+        {
+            Prompt = "You are the Security Auditor Agent. Audit the repository...",
+            Model = "gemini-2.5-pro"
+        });
+        secResp.Content.Should().Contain("KeyResolver.cs");
+
+        var refactResp = await client.GenerateAsync(new LlmRequest
+        {
+            Prompt = "You are the Refactoring Agent. Analyze complexity...",
+            Model = "gemini-2.5-flash"
+        });
+        refactResp.Content.Should().Contain("AuditCommand.cs");
+    }
 }
