@@ -36,6 +36,14 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         [CommandOption("--mock")]
         [Description("Use simulated mock AI subagents for offline execution.")]
         public bool UseMock { get; set; }
+
+        [CommandOption("--mock-llm")]
+        [Description("Use simulated mock LLM subagents while preserving live TypeSafe Jev triage.")]
+        public bool UseMockLlm { get; set; }
+
+        [CommandOption("-r|--repo <OWNER/REPO>")]
+        [Description("GitHub repository coordinates (e.g. 'owner/repo'). Overrides git remote origin and config.")]
+        public string? Repository { get; set; }
     }
 
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
@@ -49,6 +57,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.MarkupLine("[bold grey]Multi-Agent AI Repo Auditor & Backlog Sentinel[/]\n");
 
         var repoDir = Path.GetFullPath(settings.RepoDirectory);
+        DotEnvLoader.Load(repoDir);
         var (commitSha, branch) = GitMetadataHelper.GetGitMetadata(repoDir);
         var configPath = Path.IsPathRooted(settings.ConfigPath)
             ? settings.ConfigPath
@@ -93,9 +102,11 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.WriteLine();
 
         // 2. System 2 Discovery Execution
-        ILlmClient llmClient = settings.UseMock
+        var apiKey = KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
+
+        ILlmClient llmClient = (settings.UseMock || settings.UseMockLlm)
             ? new MockLlmClient()
-            : new GeminiLlmClient();
+            : new GeminiLlmClient(apiKey);
 
         var orchestrator = new SubagentOrchestrator(llmClient);
         OrchestrationResult orchestrationResult = null!;
@@ -108,6 +119,11 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             });
 
         AnsiConsole.MarkupLine($"[green]✓[/] System 2 Discovery complete in [cyan]{orchestrationResult.TotalDurationMs}ms[/] (Tokens: [yellow]{orchestrationResult.TotalTokens}[/])\n");
+
+        foreach (var err in orchestrationResult.SubagentResults.Where(r => !r.IsSuccess))
+        {
+            AnsiConsole.MarkupLine($"[red]✗ Subagent {err.AgentName} failed:[/] {Markup.Escape(err.ErrorMessage ?? "Unknown error")}");
+        }
 
         // Display Findings Table
         if (orchestrationResult.AllFindings.Count == 0)
@@ -148,7 +164,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.Write(findingsTable);
         AnsiConsole.WriteLine();
 
-        var (owner, repo) = GitHubService.ResolveRepoCoordinates(repoDir);
+        var explicitRepo = settings.Repository ?? config.Github.Repository;
+        var (owner, repo) = GitHubService.ResolveRepoCoordinates(repoDir, explicitRepo);
         IGitHubService gitHubService = settings.UseMock || settings.DryRun
             ? new MockGitHubService()
             : new GitHubService();
@@ -162,9 +179,10 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             });
 
         // 3. System 1 Jev Decision Engine (Triage Gatekeeper)
+        var jevApiKey = KeyResolver.Resolve(config.Triage.Jev.ApiKey, config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
         ITriageEngine triageEngine = settings.UseMock || config.Triage.Engine == "llm-synthesizer"
             ? new MockTriageEngine()
-            : new TypeSafeJevEngine();
+            : new TypeSafeJevEngine(jevApiKey);
 
         List<TriageDecision> triageDecisions = null!;
 
@@ -237,19 +255,41 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             {
                 AnsiConsole.MarkupLine("[bold yellow]⚡ Dry Run Mode:[/] Skipping GitHub issue creation and Project v2 column mutations.\n");
             }
+            else if (owner == "local-owner")
+            {
+                AnsiConsole.MarkupLine("[bold yellow]⚠ Skipping GitHub Publishing:[/] No remote repository configured (resolved to placeholder 'local-owner/GitGavel').");
+                AnsiConsole.MarkupLine("  [grey]To publish issues to GitHub, specify a repository via [cyan]--repo <owner/repo>[/], set [cyan]repository: <owner/repo>[/] under [cyan]github:[/] in .gitgavel.yml, or configure a git remote origin (e.g. `git remote add origin https://github.com/<owner>/<repo>.git`). Run with [cyan]--dry-run[/] to suppress this warning.[/]\n");
+            }
             else
             {
-                await AnsiConsole.Status()
-                    .Spinner(Spinner.Known.Aesthetic)
-                    .StartAsync($"Publishing {actionable.Count} issues to GitHub ({owner}/{repo}) and updating Projects v2...", async ctx =>
-                    {
-                        foreach (var d in actionable)
+                try
+                {
+                    await AnsiConsole.Status()
+                        .Spinner(Spinner.Known.Aesthetic)
+                        .StartAsync($"Publishing {actionable.Count} issues to GitHub ({owner}/{repo}) and updating Projects v2...", async ctx =>
                         {
-                            var created = await gitHubService.CreateOrUpdateIssueAsync(owner, repo, d, config, cancellationToken);
-                            await gitHubService.AssignToProjectV2Async(owner, repo, created, d, config, cancellationToken);
-                        }
-                    });
-                AnsiConsole.MarkupLine($"[bold green]✓[/] Published [cyan]{actionable.Count}[/] issues to GitHub ([bold]{owner}/{repo}[/]) and synced to Projects v2.\n");
+                            foreach (var d in actionable)
+                            {
+                                var created = await gitHubService.CreateOrUpdateIssueAsync(owner, repo, d, config, cancellationToken);
+                                await gitHubService.AssignToProjectV2Async(owner, repo, created, d, config, cancellationToken);
+                            }
+                        });
+                    AnsiConsole.MarkupLine($"[bold green]✓[/] Published [cyan]{actionable.Count}[/] issues to GitHub ([bold]{owner}/{repo}[/]) and synced to Projects v2.\n");
+                }
+                catch (Octokit.NotFoundException)
+                {
+                    AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Repository [bold]{owner}/{repo}[/] was not found on GitHub (404 Not Found).");
+                    AnsiConsole.MarkupLine("  [grey]Please verify that the repository exists on GitHub, your GITHUB_TOKEN has access to it, or run with [cyan]--dry-run[/].[/]\n");
+                }
+                catch (Octokit.AuthorizationException)
+                {
+                    AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Authentication failed (401/403 Unauthorized).");
+                    AnsiConsole.MarkupLine("  [grey]Please verify that your GITHUB_TOKEN has [bold]issues:write[/] and [bold]project:write[/] permissions.[/]\n");
+                }
+                catch (Exception ex)
+                {
+                    AnsiConsole.MarkupLine($"[bold red]✗ Failed to publish issues to GitHub:[/] {Markup.Escape(ex.Message)}\n");
+                }
             }
         }
 

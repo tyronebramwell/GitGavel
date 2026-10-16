@@ -99,4 +99,20 @@ public class GitHubTests
         mock.ProjectAssignments.Should().HaveCount(1);
         mock.ProjectAssignments[0].Column.Should().Be("Backlog");
     }
+
+    [Fact]
+    public void ResolveRepoCoordinates_WithExplicitRepo_ReturnsParsedCoordinates()
+    {
+        var (owner, repo) = GitHubService.ResolveRepoCoordinates(".", "my-org/my-project");
+        owner.Should().Be("my-org");
+        repo.Should().Be("my-project");
+    }
+
+    [Fact]
+    public void ResolveRepoCoordinates_WithoutExplicitOrRemote_ReturnsLocalPlaceholder()
+    {
+        var (owner, repo) = GitHubService.ResolveRepoCoordinates(".", null);
+        owner.Should().Be("local-owner");
+        repo.Should().Be("GitGavel");
+    }
 }

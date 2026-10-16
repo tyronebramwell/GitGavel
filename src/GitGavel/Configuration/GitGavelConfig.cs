@@ -29,18 +29,21 @@ public class SourceScopeConfig
 
 public class SubagentsConfig
 {
+    public string ApiKeyEnv { get; set; } = "AI_API_KEY";
+    public string? ApiKey { get; set; }
+
     public SubagentSettings SpecDrift { get; set; } = new()
     {
         Enabled = true,
         Provider = "gemini",
-        Model = "gemini-1.5-pro"
+        Model = "gemini-2.5-pro"
     };
 
     public SecuritySubagentSettings Security { get; set; } = new()
     {
         Enabled = true,
         Provider = "gemini",
-        Model = "gemini-1.5-pro",
+        Model = "gemini-2.5-pro",
         SarifReports = ["reports/semgrep.sarif"]
     };
 
@@ -48,7 +51,7 @@ public class SubagentsConfig
     {
         Enabled = true,
         Provider = "gemini",
-        Model = "gemini-1.5-flash"
+        Model = "gemini-2.5-flash"
     };
 }
 
@@ -56,7 +59,7 @@ public class SubagentSettings
 {
     public bool Enabled { get; set; } = true;
     public string Provider { get; set; } = "gemini";
-    public string Model { get; set; } = "gemini-1.5-pro";
+    public string Model { get; set; } = "gemini-2.5-pro";
 }
 
 public class SecuritySubagentSettings : SubagentSettings
@@ -74,6 +77,7 @@ public class TriageConfig
 public class JevConfig
 {
     public string ApiKeyEnv { get; set; } = "JEV_API_KEY";
+    public string? ApiKey { get; set; }
     public JevThresholds Thresholds { get; set; } = new();
     public bool DedupeWithNoul { get; set; } = true;
 }
@@ -102,6 +106,7 @@ public class ReportsSelection
 
 public class GitHubConfig
 {
+    public string? Repository { get; set; }
     public List<string> Labels { get; set; } = ["ai-backlog"];
     public ProjectsV2Config ProjectsV2 { get; set; } = new();
 }

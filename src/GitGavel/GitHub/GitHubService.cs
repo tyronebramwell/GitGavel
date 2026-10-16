@@ -271,17 +271,24 @@ public class GitHubService : IGitHubService
         return await resp.Content.ReadAsStringAsync(ct);
     }
 
-    public static (string owner, string repo) ResolveRepoCoordinates(string workingDirectory)
+    public static (string owner, string repo) ResolveRepoCoordinates(string workingDirectory, string? explicitRepo = null)
     {
-        // Check GITHUB_REPOSITORY environment variable first (format: "owner/repo")
+        // 1. Explicit override passed via CLI option or config (format: "owner/repo")
+        if (!string.IsNullOrWhiteSpace(explicitRepo) && explicitRepo.Contains('/'))
+        {
+            var parts = explicitRepo.Split('/', 2);
+            return (parts[0].Trim(), parts[1].Trim());
+        }
+
+        // 2. Check GITHUB_REPOSITORY environment variable (format: "owner/repo")
         var envRepo = Environment.GetEnvironmentVariable("GITHUB_REPOSITORY");
         if (!string.IsNullOrWhiteSpace(envRepo) && envRepo.Contains('/'))
         {
             var parts = envRepo.Split('/', 2);
-            return (parts[0], parts[1]);
+            return (parts[0].Trim(), parts[1].Trim());
         }
 
-        // Query git remote origin url
+        // 3. Query git remote origin url
         var remote = RunGit(workingDirectory, "remote get-url origin");
         if (!string.IsNullOrWhiteSpace(remote))
         {
