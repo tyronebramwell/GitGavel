@@ -1,7 +1,42 @@
+# Build and Output directories
 bin/
 obj/
+out/
+dist/
 /packages/
-riderModule.iml
-/_ReSharper.Caches/
+TestResults/
 reports/
+
+# Environment and Secret Files
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+
+# JetBrains Rider & IntelliJ
 .idea/
+*.iml
+/_ReSharper.Caches/
+
+# Visual Studio & VS Code
+.vs/
+.vscode/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Crash and Diagnostic Logs
+*.log
+*.crash

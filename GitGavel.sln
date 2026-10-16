@@ -6,9 +6,11 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Solution Items", "Solution 
 		.gitgavel.yml.example = .gitgavel.yml.example
 		gitgavel.example.yml = gitgavel.example.yml
 		SPECIFICATION.md = SPECIFICATION.md
+		README.md = README.md
 		Dockerfile = Dockerfile
 		action.yml = action.yml
 		.gitignore = .gitignore
+		.env.example = .env.example
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = ".github", ".github", "{4E75DC08-FBF7-402E-A795-B6BCF0AC79E0}"
@@ -16,6 +18,7 @@ EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "workflows", "workflows", "{1DE9BA47-0628-40C9-A0A6-9280E1BA5EE5}"
 	ProjectSection(SolutionItems) = preProject
 		.github\workflows\audit.yml = .github\workflows\audit.yml
+		.github\workflows\ci.yml = .github\workflows\ci.yml
 	EndProjectSection
 EndProject
 Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "src", "src", "{827E0CD3-B72D-47B6-A68D-7590B98EB39B}"

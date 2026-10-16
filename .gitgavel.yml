@@ -2,6 +2,7 @@ version: 1
 scope:
   specs:
     include:
+    - SPECIFICATION.md
     - docs/**/*.md
     - specs/**/*.md
     - api/openapi.json
@@ -16,20 +17,21 @@ scope:
     - '**/*.Tests/**'
     - '**/.git/**'
 subagents:
+  apiKeyEnv: GEMINI_API_KEY
   specDrift:
     enabled: true
     provider: gemini
-    model: gemini-1.5-pro
+    model: gemini-2.5-flash
   security:
     sarifReports:
     - reports/semgrep.sarif
     enabled: true
     provider: gemini
-    model: gemini-1.5-pro
+    model: gemini-2.5-flash
   refactoring:
     enabled: true
     provider: gemini
-    model: gemini-1.5-flash
+    model: gemini-2.5-flash
 triage:
   engine: jev
   jev:
