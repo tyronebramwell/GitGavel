@@ -74,6 +74,71 @@ public class System2Tests
     }
 
     [Fact]
+    public void FindingParser_WithExplicitReferences_ParsesMarkdownAndObjectReferences()
+    {
+        var raw = """
+        [
+          {
+            "title": "SQL Injection in User Lookup",
+            "summary": "Direct concatenation of user parameter into SQL query string.",
+            "category": "Security",
+            "severity": "Critical",
+            "filePath": "src/Repositories/UserRepository.cs",
+            "startLine": 45,
+            "endLine": 52,
+            "owaspCategory": "A03: Injection",
+            "suggestedRemediation": "Use parameterized queries.",
+            "references": [
+              "[OWASP SQL Injection Prevention](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html)",
+              "https://stackoverflow.com/questions/12345/how-to-prevent-sql-injection-in-c-sharp",
+              {
+                "title": "Microsoft Learn: EF Core Parameterization",
+                "url": "https://learn.microsoft.com/en-us/ef/core/querying/raw-sql"
+              }
+            ]
+          }
+        ]
+        """;
+
+        var findings = FindingParser.ParseFindings(raw, "SecurityAuditor", "Security");
+
+        findings.Should().HaveCount(1);
+        var f = findings[0];
+        f.References.Should().HaveCount(3);
+        f.References[0].Should().Be("[OWASP SQL Injection Prevention](https://cheatsheetseries.owasp.org/cheatsheets/SQL_Injection_Prevention_Cheat_Sheet.html)");
+        f.References[1].Should().Be("[Stack Overflow Discussion](https://stackoverflow.com/questions/12345/how-to-prevent-sql-injection-in-c-sharp)");
+        f.References[2].Should().Be("[Microsoft Learn: EF Core Parameterization](https://learn.microsoft.com/en-us/ef/core/querying/raw-sql)");
+    }
+
+    [Fact]
+    public void FindingParser_WithoutReferences_ProvidesIntelligentDefaultReferences()
+    {
+        var raw = """
+        [
+          {
+            "title": "Unauthenticated Controller Endpoint",
+            "summary": "Endpoint does not validate JWT authentication.",
+            "category": "Security",
+            "severity": "High",
+            "filePath": "src/Controllers/SecretController.cs",
+            "startLine": 10,
+            "endLine": 20,
+            "owaspCategory": "A01: Broken Access Control",
+            "suggestedRemediation": "Add [Authorize] attribute."
+          }
+        ]
+        """;
+
+        var findings = FindingParser.ParseFindings(raw, "SecurityAuditor", "Security");
+
+        findings.Should().HaveCount(1);
+        var f = findings[0];
+        f.References.Should().NotBeEmpty();
+        f.References.Should().Contain(r => r.Contains("Broken Access Control"));
+        f.References.Should().Contain(r => r.Contains("stackoverflow.com"));
+    }
+
+    [Fact]
     public async Task SubagentOrchestrator_RunsAllEnabledSubagentsConcurrently()
     {
         var mockClient = new MockLlmClient(req =>
@@ -141,6 +206,8 @@ public class System2Tests
             Model = "gemini-2.5-pro"
         });
         specResp.Content.Should().Contain("SPECIFICATION.md");
+        specResp.Content.Should().Contain("references");
+        specResp.Content.Should().Contain("stackoverflow.com");
 
         var secResp = await client.GenerateAsync(new LlmRequest
         {
@@ -148,6 +215,8 @@ public class System2Tests
             Model = "gemini-2.5-pro"
         });
         secResp.Content.Should().Contain("KeyResolver.cs");
+        secResp.Content.Should().Contain("references");
+        secResp.Content.Should().Contain("OWASP A07:2021");
 
         var refactResp = await client.GenerateAsync(new LlmRequest
         {
@@ -155,6 +224,8 @@ public class System2Tests
             Model = "gemini-2.5-flash"
         });
         refactResp.Content.Should().Contain("AuditCommand.cs");
+        refactResp.Content.Should().Contain("references");
+        refactResp.Content.Should().Contain("refactoring.guru");
     }
 
     [Fact]

@@ -56,6 +56,20 @@ public class GitHubTests
     }
 
     [Fact]
+    public void IssueFormatter_FormatsBodyWithLearningReferences()
+    {
+        var decision = CreateDecision("Insecure Direct Object Reference", "Security", "P1", 4.2, "Backlog", TriageStatus.AcceptedToBacklog);
+        decision.Finding.References.Add("[OWASP Top 10 Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)");
+        decision.Finding.References.Add("[Stack Overflow: ASP.NET Core Resource Authorization](https://stackoverflow.com/questions/tagged/asp.net-core)");
+
+        var body = IssueFormatter.FormatIssueBody(decision);
+
+        body.Should().Contain("## 📚 Learning & Research References");
+        body.Should().Contain("- [OWASP Top 10 Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)");
+        body.Should().Contain("- [Stack Overflow: ASP.NET Core Resource Authorization](https://stackoverflow.com/questions/tagged/asp.net-core)");
+    }
+
+    [Fact]
     public void IssueFormatter_ParsesMetadataCommentSuccessfully()
     {
         var rawComment = """

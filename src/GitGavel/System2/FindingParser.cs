@@ -82,6 +82,9 @@ public static partial class FindingParser
         var startLine = GetInt(elem, "startLine", 1);
         var endLine = GetInt(elem, "endLine", startLine);
 
+        var rawReferences = ParseReferences(elem);
+        var references = EnsureDefaultReferences(rawReferences, category, owasp, title);
+
         return new FindingCandidate
         {
             Title = title,
@@ -95,7 +98,8 @@ public static partial class FindingParser
             SuggestedRemediation = remediation,
             AttackVector = attackVector,
             OwaspCategory = owasp,
-            Details = details
+            Details = details,
+            References = references
         };
     }
 
@@ -115,5 +119,136 @@ public static partial class FindingParser
             return val;
         }
         return defaultValue;
+    }
+
+    private static List<string> ParseReferences(JsonElement elem)
+    {
+        var list = new List<string>();
+        if (!elem.TryGetProperty("references", out var prop) &&
+            !elem.TryGetProperty("learningReferences", out prop) &&
+            !elem.TryGetProperty("links", out prop))
+        {
+            return list;
+        }
+
+        if (prop.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in prop.EnumerateArray())
+            {
+                if (item.ValueKind == JsonValueKind.String)
+                {
+                    var str = item.GetString();
+                    if (!string.IsNullOrWhiteSpace(str))
+                    {
+                        list.Add(FormatReferenceLink(str.Trim()));
+                    }
+                }
+                else if (item.ValueKind == JsonValueKind.Object)
+                {
+                    var title = GetString(item, "title") ?? GetString(item, "name") ?? "Documentation Reference";
+                    var url = GetString(item, "url") ?? GetString(item, "link") ?? GetString(item, "href");
+                    if (!string.IsNullOrWhiteSpace(url))
+                    {
+                        list.Add($"[{title}]({url})");
+                    }
+                }
+            }
+        }
+        else if (prop.ValueKind == JsonValueKind.String)
+        {
+            var str = prop.GetString();
+            if (!string.IsNullOrWhiteSpace(str))
+            {
+                list.Add(FormatReferenceLink(str.Trim()));
+            }
+        }
+
+        return list;
+    }
+
+    private static string FormatReferenceLink(string input)
+    {
+        if (input.StartsWith('[') && input.Contains("](") && input.EndsWith(')'))
+        {
+            return input;
+        }
+
+        if (Uri.TryCreate(input, UriKind.Absolute, out var uri))
+        {
+            if (uri.Host.Contains("stackoverflow.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"[Stack Overflow Discussion]({input})";
+            }
+            if (uri.Host.Contains("microsoft.com", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"[Microsoft Learn Documentation]({input})";
+            }
+            if (uri.Host.Contains("owasp.org", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"[OWASP Security Guidance]({input})";
+            }
+            if (uri.Host.Contains("refactoring.guru", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"[Refactoring Guru Guide]({input})";
+            }
+            return $"[Reference Documentation]({input})";
+        }
+
+        return input;
+    }
+
+    private static List<string> EnsureDefaultReferences(List<string> references, string category, string? owaspCategory, string title)
+    {
+        if (references.Count > 0) return references;
+
+        var defaults = new List<string>();
+
+        if (category.Equals("Security", StringComparison.OrdinalIgnoreCase))
+        {
+            if (!string.IsNullOrWhiteSpace(owaspCategory) && owaspCategory.StartsWith("A01", StringComparison.OrdinalIgnoreCase))
+            {
+                defaults.Add("[OWASP Top 10 - Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)");
+            }
+            else if (!string.IsNullOrWhiteSpace(owaspCategory) && (owaspCategory.StartsWith("A02", StringComparison.OrdinalIgnoreCase) || owaspCategory.Contains("Crypto", StringComparison.OrdinalIgnoreCase)))
+            {
+                defaults.Add("[OWASP Top 10 - Cryptographic Failures](https://owasp.org/Top10/A02_2021-Cryptographic_Failures/)");
+            }
+            else if (!string.IsNullOrWhiteSpace(owaspCategory) && (owaspCategory.StartsWith("A03", StringComparison.OrdinalIgnoreCase) || owaspCategory.Contains("Injection", StringComparison.OrdinalIgnoreCase)))
+            {
+                defaults.Add("[OWASP Top 10 - Injection](https://owasp.org/Top10/A03_2021-Injection/)");
+            }
+            else if (!string.IsNullOrWhiteSpace(owaspCategory) && owaspCategory.StartsWith("A07", StringComparison.OrdinalIgnoreCase))
+            {
+                defaults.Add("[OWASP Top 10 - Identification and Authentication Failures](https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/)");
+                defaults.Add("[Microsoft Learn: Safe storage of app secrets](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets)");
+            }
+            else
+            {
+                defaults.Add("[OWASP Top 10 Security Risks Overview](https://owasp.org/www-project-top-ten/)");
+            }
+
+            defaults.Add("[Microsoft Learn: Secure Coding Guidelines](https://learn.microsoft.com/en-us/dotnet/standard/security/secure-coding-guidelines)");
+            defaults.Add("[Stack Overflow: Secure development practices](https://stackoverflow.com/questions/tagged/security)");
+        }
+        else if (category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase))
+        {
+            defaults.Add("[Microsoft Learn: RESTful Web API Design Best Practices](https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design)");
+            defaults.Add("[OpenAPI Specification Standard](https://spec.openapis.org/oas/latest.html)");
+            defaults.Add("[Stack Overflow: API specification and contract testing](https://stackoverflow.com/questions/tagged/contract-testing)");
+        }
+        else if (category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase) || category.Contains("Debt", StringComparison.OrdinalIgnoreCase) || category.Contains("Coupling", StringComparison.OrdinalIgnoreCase))
+        {
+            defaults.Add("[Refactoring Guru: Code Smells and Refactoring Techniques](https://refactoring.guru/refactoring)");
+            defaults.Add("[Microsoft Learn: Common Web Application Architectures](https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/common-web-application-architectures)");
+            defaults.Add("[Stack Overflow: Software design patterns and clean architecture](https://stackoverflow.com/questions/tagged/design-patterns)");
+        }
+        else if (category.Equals("Testing", StringComparison.OrdinalIgnoreCase) || category.Contains("Test", StringComparison.OrdinalIgnoreCase))
+        {
+            defaults.Add("[Microsoft Learn: Unit testing best practices with .NET Core and .NET Standard](https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices)");
+            defaults.Add("[Martin Fowler: Practical Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)");
+            defaults.Add("[Stack Overflow: Automated test design patterns and assertions](https://stackoverflow.com/questions/tagged/unit-testing)");
+        }
+
+        return defaults;
     }
 }

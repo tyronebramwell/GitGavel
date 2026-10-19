@@ -62,7 +62,7 @@ public class SpecDriftAgent : ISubagent
         }
 
         promptBuilder.AppendLine();
-        promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item:");
+        promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item. For 'references', provide 2-3 links in markdown format (e.g. [Title](url)) pointing to official framework/API docs, Stack Overflow topics, or research articles:");
         promptBuilder.AppendLine("""
         [
           {
@@ -74,7 +74,11 @@ public class SpecDriftAgent : ISubagent
             "startLine": 10,
             "endLine": 30,
             "suggestedRemediation": "Concrete code snippet or action plan to align code with spec",
-            "details": "Specification section referenced vs actual implementation"
+            "details": "Specification section referenced vs actual implementation",
+            "references": [
+              "[Microsoft Learn: REST API Design Guidelines](https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design)",
+              "[Stack Overflow: Managing OpenAPI contract drift](https://stackoverflow.com/questions/tagged/openapi)"
+            ]
           }
         ]
         """);

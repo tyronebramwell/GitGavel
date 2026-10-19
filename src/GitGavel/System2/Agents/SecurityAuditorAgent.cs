@@ -43,7 +43,7 @@ public class SecurityAuditorAgent : ISubagent
         }
 
         promptBuilder.AppendLine();
-        promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item:");
+        promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item. For 'references', provide 2-3 links in markdown format (e.g. [Title](url)) pointing to OWASP guidelines, official security docs, or Stack Overflow topics:");
         promptBuilder.AppendLine("""
         [
           {
@@ -56,7 +56,12 @@ public class SecurityAuditorAgent : ISubagent
             "endLine": 35,
             "owaspCategory": "A01: Broken Access Control | A03: Injection | etc.",
             "attackVector": "How an adversary could exploit this vulnerability",
-            "suggestedRemediation": "Safe code snippet and defense-in-depth guidance"
+            "suggestedRemediation": "Safe code snippet and defense-in-depth guidance",
+            "references": [
+              "[OWASP Top 10 Security Guidance](https://owasp.org/Top10/)",
+              "[Microsoft Learn: Secure Coding Guidelines](https://learn.microsoft.com/en-us/dotnet/standard/security/secure-coding-guidelines)",
+              "[Stack Overflow: Secure development best practices](https://stackoverflow.com/questions/tagged/security)"
+            ]
           }
         ]
         """);

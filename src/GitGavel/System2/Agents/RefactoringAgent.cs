@@ -61,7 +61,7 @@ public class RefactoringAgent : ISubagent
         }
 
         promptBuilder.AppendLine();
-        promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item:");
+        promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item. For 'references', provide 2-3 links in markdown format (e.g. [Title](url)) pointing to refactoring guides, architecture docs, or Stack Overflow topics:");
         promptBuilder.AppendLine("""
         [
           {
@@ -73,7 +73,12 @@ public class RefactoringAgent : ISubagent
             "startLine": 20,
             "endLine": 60,
             "suggestedRemediation": "Concrete refactoring proposal or design pattern recommendation",
-            "details": "Impact on maintainability and testability"
+            "details": "Impact on maintainability and testability",
+            "references": [
+              "[Refactoring Guru: Code Smells and Refactoring Techniques](https://refactoring.guru/refactoring)",
+              "[Microsoft Learn: Architectural Principles and Clean Architecture](https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles)",
+              "[Stack Overflow: Decoupling and dependency injection patterns](https://stackoverflow.com/questions/tagged/dependency-injection)"
+            ]
           }
         ]
         """);

@@ -48,6 +48,15 @@ public class CodeQualityReporter : BaseMarkdownReporter
                 sb.AppendLine("**Remediation:**");
                 sb.AppendLine(f.SuggestedRemediation);
                 sb.AppendLine();
+                if (f.References.Count > 0)
+                {
+                    sb.AppendLine("**Learning References:**");
+                    foreach (var r in f.References)
+                    {
+                        sb.AppendLine($"- {r}");
+                    }
+                    sb.AppendLine();
+                }
                 sb.AppendLine("---");
                 sb.AppendLine();
             }
@@ -101,6 +110,15 @@ public class CodeQualityReporter : BaseMarkdownReporter
                 sb.AppendLine("**Proposed Refactoring Pattern:**");
                 sb.AppendLine(f.SuggestedRemediation);
                 sb.AppendLine();
+                if (f.References.Count > 0)
+                {
+                    sb.AppendLine("**Learning References:**");
+                    foreach (var r in f.References)
+                    {
+                        sb.AppendLine($"- {r}");
+                    }
+                    sb.AppendLine();
+                }
                 sb.AppendLine("---");
                 sb.AppendLine();
             }

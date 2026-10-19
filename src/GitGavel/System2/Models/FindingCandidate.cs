@@ -18,6 +18,7 @@ public record FindingCandidate
     public string? AttackVector { get; init; }
     public string? OwaspCategory { get; init; }
     public string? Details { get; init; }
+    public List<string> References { get; init; } = [];
     public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;
 
     private string? _fingerprint;

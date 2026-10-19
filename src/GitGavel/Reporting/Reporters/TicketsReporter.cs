@@ -164,7 +164,8 @@ public class TicketsReporter : BaseMarkdownReporter
                     endLine = d.Finding.EndLine,
                     targetColumn = d.TargetColumn,
                     fingerprint = d.Finding.Fingerprint,
-                    suggestedRemediation = d.Finding.SuggestedRemediation
+                    suggestedRemediation = d.Finding.SuggestedRemediation,
+                    references = d.Finding.References
                 }),
             reviewIssues = ctx.TriageDecisions
                 .Where(d => d.Status == TriageStatus.RoutedToHumanReview)
@@ -178,7 +179,8 @@ public class TicketsReporter : BaseMarkdownReporter
                     startLine = d.Finding.StartLine,
                     reason = d.Reason,
                     matchedIssueNumber = d.DuplicateOfIssueNumber,
-                    duplicateProbability = d.DuplicateProbability
+                    duplicateProbability = d.DuplicateProbability,
+                    references = d.Finding.References
                 }),
             suppressedDuplicates = ctx.TriageDecisions
                 .Where(d => d.Status == TriageStatus.SuppressedDuplicate)

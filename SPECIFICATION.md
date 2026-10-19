@@ -186,7 +186,7 @@ A dedicated assessment of the automated test suite across Unit, Integration, and
 
 ## 7. Issue Formatting & Metadata Signature
 
-Every issue created embeds structured metadata in an HTML comment for deterministic parsing:
+Every issue created embeds structured metadata in an HTML comment for deterministic parsing, accompanied by curated research and learning references (official framework documentation, Stack Overflow discussions, and architectural articles) to accelerate developer remediation:
 
 ```markdown
 ## ⚠️ Summary
@@ -201,6 +201,11 @@ Every issue created embeds structured metadata in an HTML comment for determinis
 
 ## 💡 Suggested Remediation
 [Actionable recommendation and proposed code snippet]
+
+## 📚 Learning & Research References
+- [OWASP Top 10 - Cryptographic Failures](https://owasp.org/Top10/A02_2021-Cryptographic_Failures/)
+- [Microsoft Learn: Safe Storage of App Secrets](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets)
+- [Stack Overflow: Storing API secrets securely in .NET](https://stackoverflow.com/questions/tagged/asp.net-core-security)
 
 ---
 <!-- gitgavel-metadata

@@ -56,6 +56,16 @@ public static partial class IssueFormatter
             sb.AppendLine();
         }
 
+        if (f.References.Count > 0)
+        {
+            sb.AppendLine("## 📚 Learning & Research References");
+            foreach (var r in f.References)
+            {
+                sb.AppendLine($"- {r}");
+            }
+            sb.AppendLine();
+        }
+
         sb.AppendLine("---");
         sb.AppendLine("<!-- gitgavel-metadata");
         sb.AppendLine($"fingerprint: {f.Fingerprint}");

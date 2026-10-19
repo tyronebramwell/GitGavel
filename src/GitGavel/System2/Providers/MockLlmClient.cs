@@ -34,7 +34,12 @@ public class MockLlmClient : ILlmClient
                 "startLine": 215,
                 "endLine": 224,
                 "suggestedRemediation": "Align SPECIFICATION.md model definitions with modern production Gemini releases.",
-                "details": "Specification drift detected between documentation and implementation."
+                "details": "Specification drift detected between documentation and implementation.",
+                "references": [
+                  "[Semantic Versioning 2.0.0](https://semver.org/)",
+                  "[Microsoft Learn: Breaking Changes and API Versioning](https://learn.microsoft.com/en-us/dotnet/standard/base-types/breaking-changes)",
+                  "[Stack Overflow: Handling API specification drift in CI/CD](https://stackoverflow.com/questions/tagged/api-design)"
+                ]
               }
             ]
             """;
@@ -53,7 +58,12 @@ public class MockLlmClient : ILlmClient
                 "endLine": 35,
                 "suggestedRemediation": "Enforce loading secrets strictly via environment variables or secret vaults in non-local environments.",
                 "owaspCategory": "A07:2021-Identification and Authentication Failures",
-                "details": "Credentials stored directly in local configuration files can be inadvertently committed."
+                "details": "Credentials stored directly in local configuration files can be inadvertently committed.",
+                "references": [
+                  "[OWASP A07:2021 Identification and Authentication Failures](https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/)",
+                  "[Microsoft Learn: Safe storage of app secrets in development](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets)",
+                  "[Stack Overflow: Storing API secrets securely in .NET](https://stackoverflow.com/questions/tagged/asp.net-core-security)"
+                ]
               }
             ]
             """;
@@ -71,7 +81,12 @@ public class MockLlmClient : ILlmClient
                 "startLine": 45,
                 "endLine": 289,
                 "suggestedRemediation": "Extract pipeline stages into dedicated coordinator services to improve cohesion and testability.",
-                "details": "Method has high cyclomatic complexity and mixes presentation logic with domain orchestration."
+                "details": "Method has high cyclomatic complexity and mixes presentation logic with domain orchestration.",
+                "references": [
+                  "[Refactoring Guru: Large Class & High Cyclomatic Complexity](https://refactoring.guru/smells/large-class)",
+                  "[Microsoft Learn: Clean Architecture and Single Responsibility](https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/architectural-principles#single-responsibility)",
+                  "[Stack Overflow: Refactoring large orchestration methods](https://stackoverflow.com/questions/tagged/refactoring)"
+                ]
               }
             ]
             """;
