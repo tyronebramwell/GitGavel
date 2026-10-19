@@ -111,8 +111,48 @@ public class GitHubTests
     [Fact]
     public void ResolveRepoCoordinates_WithoutExplicitOrRemote_ReturnsLocalPlaceholder()
     {
-        var (owner, repo) = GitHubService.ResolveRepoCoordinates(".", null);
-        owner.Should().Be("local-owner");
-        repo.Should().Be("GitGavel");
+        var prevEnv = Environment.GetEnvironmentVariable("GITHUB_REPOSITORY");
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            Environment.SetEnvironmentVariable("GITHUB_REPOSITORY", null);
+            var (owner, repo) = GitHubService.ResolveRepoCoordinates(tempDir, null);
+            owner.Should().Be("local-owner");
+            repo.Should().Be("GitGavel");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_REPOSITORY", prevEnv);
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
+    }
+
+    [Fact]
+    public void ResolveRepoCoordinates_WithEnvVar_ReturnsEnvCoordinates()
+    {
+        var prevEnv = Environment.GetEnvironmentVariable("GITHUB_REPOSITORY");
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_test_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            Environment.SetEnvironmentVariable("GITHUB_REPOSITORY", "ci-owner/ci-repo");
+            var (owner, repo) = GitHubService.ResolveRepoCoordinates(tempDir, null);
+            owner.Should().Be("ci-owner");
+            repo.Should().Be("ci-repo");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GITHUB_REPOSITORY", prevEnv);
+            if (Directory.Exists(tempDir))
+            {
+                Directory.Delete(tempDir, true);
+            }
+        }
     }
 }
