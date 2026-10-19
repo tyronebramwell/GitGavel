@@ -59,8 +59,7 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         var jevStatus = !string.IsNullOrWhiteSpace(jevKey)
             ? "[green]Configured[/]"
             : config.Triage.Engine == "jev" ? "[red]Missing (Required)[/]" : "[yellow]Not Set (Optional)[/]";
-        var jevLabel = !string.IsNullOrWhiteSpace(config.Triage.Jev.ApiKey) ? "triage.jev.apiKey" :
-            KeyResolver.IsRawKey(config.Triage.Jev.ApiKeyEnv) ? "triage.jev.apiKeyEnv (direct key)" : config.Triage.Jev.ApiKeyEnv;
+        var jevLabel = !string.IsNullOrWhiteSpace(config.Triage.Jev.ApiKey) ? "triage.jev.apiKey" : config.Triage.Jev.ApiKeyEnv;
         envTable.AddRow(jevLabel, "Jev Decision Engine (Noul, Score, Choice)", jevStatus);
 
         // 3. GitHub Token Check

@@ -205,10 +205,13 @@ public class GitHubService : IGitHubService
 
             if (string.IsNullOrWhiteSpace(itemId)) return;
 
-            // 3. Update Status Column (Backlog vs AI Triage)
-            var targetColumnName = decision.TargetColumn == "Backlog"
-                ? config.Github.ProjectsV2.Columns.Backlog
-                : config.Github.ProjectsV2.Columns.HumanReview;
+            // 3. Update Status Column (Backlog vs AI Triage vs Discarded)
+            var targetColumnName = decision.TargetColumn switch
+            {
+                "Backlog" => config.Github.ProjectsV2.Columns.Backlog,
+                "Discard" => config.Github.ProjectsV2.Columns.Discard,
+                _ => config.Github.ProjectsV2.Columns.HumanReview
+            };
 
             if (projectElem.TryGetProperty("fields", out var fieldsElem) && fieldsElem.TryGetProperty("nodes", out var nodes))
             {
@@ -227,6 +230,23 @@ public class GitHubService : IGitHubService
                                 {
                                     var optionId = optId.GetString();
                                     await SetProjectFieldAsync(projectId, itemId, statusFieldId!, optionId!, ct);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    else if (string.Equals(fieldName, config.Github.ProjectsV2.Fields.Priority, StringComparison.OrdinalIgnoreCase) && fNode.TryGetProperty("id", out var prioFId))
+                    {
+                        var prioFieldId = prioFId.GetString();
+                        if (fNode.TryGetProperty("options", out var options))
+                        {
+                            foreach (var opt in options.EnumerateArray())
+                            {
+                                var optName = opt.TryGetProperty("name", out var on) ? on.GetString() : null;
+                                if (string.Equals(optName, decision.PriorityLabel, StringComparison.OrdinalIgnoreCase) && opt.TryGetProperty("id", out var optId))
+                                {
+                                    var optionId = optId.GetString();
+                                    await SetProjectFieldAsync(projectId, itemId, prioFieldId!, optionId!, ct);
                                     break;
                                 }
                             }
@@ -271,72 +291,8 @@ public class GitHubService : IGitHubService
         return await resp.Content.ReadAsStringAsync(ct);
     }
 
-    public static (string owner, string repo) ResolveRepoCoordinates(string workingDirectory, string? explicitRepo = null)
-    {
-        // 1. Explicit override passed via CLI option or config (format: "owner/repo")
-        if (!string.IsNullOrWhiteSpace(explicitRepo) && explicitRepo.Contains('/'))
-        {
-            var parts = explicitRepo.Split('/', 2);
-            return (parts[0].Trim(), parts[1].Trim());
-        }
+    private static readonly GitGavel.Git.IGitService DefaultGitService = new GitGavel.Git.GitService();
 
-        // 2. Check GITHUB_REPOSITORY environment variable (format: "owner/repo")
-        var envRepo = Environment.GetEnvironmentVariable("GITHUB_REPOSITORY");
-        if (!string.IsNullOrWhiteSpace(envRepo) && envRepo.Contains('/'))
-        {
-            var parts = envRepo.Split('/', 2);
-            return (parts[0].Trim(), parts[1].Trim());
-        }
-
-        // 3. Query git remote origin url
-        var remote = RunGit(workingDirectory, "remote get-url origin");
-        if (!string.IsNullOrWhiteSpace(remote))
-        {
-            // https://github.com/owner/repo.git or git@github.com:owner/repo.git
-            var clean = remote.Trim();
-            if (clean.EndsWith(".git")) clean = clean[..^4];
-
-            if (clean.StartsWith("git@github.com:"))
-            {
-                var path = clean["git@github.com:".Length..];
-                var parts = path.Split('/', 2);
-                if (parts.Length == 2) return (parts[0], parts[1]);
-            }
-            else if (clean.Contains("github.com/"))
-            {
-                var idx = clean.IndexOf("github.com/", StringComparison.Ordinal);
-                var path = clean[(idx + "github.com/".Length)..];
-                var parts = path.Split('/', 2);
-                if (parts.Length == 2) return (parts[0], parts[1]);
-            }
-        }
-
-        return ("local-owner", "GitGavel");
-    }
-
-    private static string? RunGit(string dir, string args)
-    {
-        try
-        {
-            var psi = new ProcessStartInfo
-            {
-                FileName = "git",
-                Arguments = args,
-                WorkingDirectory = dir,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-            using var p = Process.Start(psi);
-            if (p == null) return null;
-            var outText = p.StandardOutput.ReadToEnd();
-            p.WaitForExit(1500);
-            return p.ExitCode == 0 ? outText.Trim() : null;
-        }
-        catch
-        {
-            return null;
-        }
-    }
+    public static (string owner, string repo) ResolveRepoCoordinates(string workingDirectory, string? explicitRepo = null) =>
+        DefaultGitService.ResolveRepoCoordinates(workingDirectory, explicitRepo);
 }

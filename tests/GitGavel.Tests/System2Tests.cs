@@ -156,4 +156,33 @@ public class System2Tests
         });
         refactResp.Content.Should().Contain("AuditCommand.cs");
     }
+
+    [Fact]
+    public void LlmClientFactory_WithForceMock_ReturnsMockClient()
+    {
+        var factory = new LlmClientFactory(forceMock: true);
+        var config = new GitGavelConfig();
+        var client = factory.CreateClient(new SubagentSettings { Provider = "openai" }, config);
+
+        client.Should().BeOfType<MockLlmClient>();
+    }
+
+    [Fact]
+    public void LlmClientFactory_WithProviders_ResolvesAppropriateClients()
+    {
+        var factory = new LlmClientFactory();
+        var config = new GitGavelConfig();
+
+        var gemini = factory.CreateClient(new SubagentSettings { Provider = "gemini" }, config);
+        gemini.Should().BeOfType<GeminiLlmClient>();
+
+        var openai = factory.CreateClient(new SubagentSettings { Provider = "openai" }, config);
+        openai.Should().BeOfType<OpenAiLlmClient>();
+
+        var anthropic = factory.CreateClient(new SubagentSettings { Provider = "anthropic" }, config);
+        anthropic.Should().BeOfType<AnthropicLlmClient>();
+
+        var mock = factory.CreateClient(new SubagentSettings { Provider = "mock" }, config);
+        mock.Should().BeOfType<MockLlmClient>();
+    }
 }

@@ -167,4 +167,41 @@ public class ReportingTests
             if (File.Exists(tempSummaryFile)) File.Delete(tempSummaryFile);
         }
     }
+
+    [Fact]
+    public async Task ReportingEngine_WithCustomReporter_InvokesCustomReporterSuccessfully()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_custom_reporter_" + Guid.NewGuid());
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var ctx = CreateSampleContext(tempDir);
+            var customReporter = new TestCustomReporter();
+            var engine = new ReportingEngine([customReporter]);
+
+            var generated = await engine.GenerateReportsAsync(ctx);
+
+            generated.Should().ContainSingle();
+            generated[0].Should().Be(Path.Combine(tempDir, "custom-report.txt"));
+            File.Exists(generated[0]).Should().BeTrue();
+            (await File.ReadAllTextAsync(generated[0])).Should().Be("custom content");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, true);
+        }
+    }
+
+    private sealed class TestCustomReporter : IReporter
+    {
+        public string ReportName => "CustomTest";
+
+        public async Task<IEnumerable<string>> GenerateReportsAsync(ReportContext ctx, string outputDirectory, CancellationToken ct = default)
+        {
+            var file = Path.Combine(outputDirectory, "custom-report.txt");
+            await File.WriteAllTextAsync(file, "custom content", ct);
+            return [file];
+        }
+    }
 }

@@ -5,6 +5,8 @@ using GitGavel.System2.Abstractions;
 using GitGavel.System2.Agents;
 using GitGavel.System2.Models;
 
+using GitGavel.System2.Providers;
+
 namespace GitGavel.System2;
 
 public record OrchestrationResult
@@ -19,11 +21,16 @@ public record OrchestrationResult
 
 public class SubagentOrchestrator
 {
-    private readonly ILlmClient _llmClient;
+    private readonly ILlmClientFactory _clientFactory;
 
-    public SubagentOrchestrator(ILlmClient llmClient)
+    public SubagentOrchestrator(ILlmClient defaultClient)
+        : this(new LlmClientFactory(fallbackClient: defaultClient))
     {
-        _llmClient = llmClient;
+    }
+
+    public SubagentOrchestrator(ILlmClientFactory clientFactory)
+    {
+        _clientFactory = clientFactory;
     }
 
     public async Task<OrchestrationResult> RunAllAsync(RepoContext context, GitGavelConfig config, CancellationToken ct = default)
@@ -32,17 +39,20 @@ public class SubagentOrchestrator
 
         if (config.Subagents.SpecDrift.Enabled)
         {
-            agents.Add(new SpecDriftAgent(_llmClient, config.Subagents.SpecDrift.Model));
+            var client = _clientFactory.CreateClient(config.Subagents.SpecDrift, config);
+            agents.Add(new SpecDriftAgent(client, config.Subagents.SpecDrift.Model));
         }
 
         if (config.Subagents.Security.Enabled)
         {
-            agents.Add(new SecurityAuditorAgent(_llmClient, config.Subagents.Security.Model));
+            var client = _clientFactory.CreateClient(config.Subagents.Security, config);
+            agents.Add(new SecurityAuditorAgent(client, config.Subagents.Security.Model));
         }
 
         if (config.Subagents.Refactoring.Enabled)
         {
-            agents.Add(new RefactoringAgent(_llmClient, config.Subagents.Refactoring.Model));
+            var client = _clientFactory.CreateClient(config.Subagents.Refactoring, config);
+            agents.Add(new RefactoringAgent(client, config.Subagents.Refactoring.Model));
         }
 
         var sw = Stopwatch.StartNew();

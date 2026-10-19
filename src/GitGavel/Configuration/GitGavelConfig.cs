@@ -18,7 +18,7 @@ public class ScopeConfig
 
 public class SpecsScopeConfig
 {
-    public List<string> Include { get; set; } = ["docs/**/*.md", "specs/**/*.md", "api/openapi.json"];
+    public List<string> Include { get; set; } = ["SPECIFICATION.md", "Dockerfile", "action.yml", "docs/**/*.md", "specs/**/*.md", "api/openapi.json"];
 }
 
 public class SourceScopeConfig
@@ -123,6 +123,7 @@ public class ProjectColumnsConfig
 {
     public string Backlog { get; set; } = "Backlog";
     public string HumanReview { get; set; } = "AI Triage";
+    public string Discard { get; set; } = "Discarded";
 }
 
 public class ProjectFieldsConfig

@@ -20,28 +20,44 @@ public class RefactoringAgent : ISubagent
 
     public async Task<SubagentResult> ExecuteAsync(RepoContext context, CancellationToken ct = default)
     {
-        var summaries = AstAnalyzer.AnalyzeAll(context.SourceFiles);
+        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
         var hotspots = summaries.Where(s => s.IsComplexityHotspot).ToList();
 
         var promptBuilder = new StringBuilder();
-        promptBuilder.AppendLine("You are the Architecture & Refactoring Agent. Flag architectural debt, tight coupling, code duplication, and maintainability issues.");
+        promptBuilder.AppendLine("You are the Architecture & Refactoring Agent. Flag real architectural debt, tight coupling across architectural boundaries, large code duplication, and severe maintainability issues.");
+        promptBuilder.AppendLine("NOTE: Focus only on high-confidence, actionable architectural debt and anti-patterns. The project uses lightweight multi-language heuristics, standard DI defaults, and modular command patterns by architectural design; do not flag these intentional design decisions as architectural debt.");
+
+        promptBuilder.AppendLine();
+        promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
+        foreach (var sum in summaries)
+        {
+            var symbolList = sum.Symbols.Count > 0
+                ? string.Join(", ", sum.Symbols.Select(s => $"{s.Kind} {s.Name}"))
+                : "None";
+            promptBuilder.AppendLine($"- File: `{sum.RelativePath}` | Symbols: {symbolList} | Complexity: {sum.TotalComplexityScore}");
+        }
 
         if (hotspots.Count > 0)
         {
             promptBuilder.AppendLine();
             promptBuilder.AppendLine("### Detected Complexity Hotspots:");
-            foreach (var spot in hotspots.Take(10))
+            foreach (var spot in hotspots)
             {
-                promptBuilder.AppendLine($"- Hotspot: {spot.RelativePath} (Complexity score: {spot.TotalComplexityScore}, Symbols: {spot.Symbols.Count})");
+                promptBuilder.AppendLine($"- Hotspot: `{spot.RelativePath}` (Complexity score: {spot.TotalComplexityScore}, Symbols: {spot.Symbols.Count})");
             }
         }
 
         promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Source Code Files:");
-        foreach (var src in context.SourceFiles.Take(12))
+        promptBuilder.AppendLine("### Source Code Implementation:");
+        var hotspotPaths = new HashSet<string>(hotspots.Select(h => h.RelativePath));
+        var prioritizedFiles = context.SourceFiles
+            .OrderByDescending(f => hotspotPaths.Contains(f.RelativePath))
+            .ThenByDescending(f => f.LineCount);
+
+        foreach (var src in prioritizedFiles)
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
-            promptBuilder.AppendLine(src.Content.Length > 3000 ? src.Content[..3000] + "\n...(truncated)" : src.Content);
+            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
         }
 
         promptBuilder.AppendLine();

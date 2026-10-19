@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using GitGavel.Configuration;
 using GitGavel.Discovery;
+using GitGavel.Git;
 using GitGavel.System2;
 using GitGavel.System2.Abstractions;
 using GitGavel.System2.Providers;
@@ -17,6 +18,13 @@ namespace GitGavel.Commands;
 
 public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 {
+    private readonly IGitService _gitService;
+
+    public AuditCommand(IGitService? gitService = null)
+    {
+        _gitService = gitService ?? new GitService();
+    }
+
     public class Settings : CommandSettings
     {
         [CommandOption("-c|--config <PATH>")]
@@ -56,9 +64,23 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         AnsiConsole.MarkupLine("[bold grey]Multi-Agent AI Repo Auditor & Backlog Sentinel[/]\n");
 
+        // Support GitHub Action workflow inputs passed via INPUT_* environment variables
+        if (!settings.DryRun && string.Equals(Environment.GetEnvironmentVariable("INPUT_DRY_RUN"), "true", StringComparison.OrdinalIgnoreCase))
+            settings.DryRun = true;
+        if (!settings.UseMock && string.Equals(Environment.GetEnvironmentVariable("INPUT_MOCK"), "true", StringComparison.OrdinalIgnoreCase))
+            settings.UseMock = true;
+        if (!settings.UseMockLlm && string.Equals(Environment.GetEnvironmentVariable("INPUT_MOCK_LLM"), "true", StringComparison.OrdinalIgnoreCase))
+            settings.UseMockLlm = true;
+        if (settings.RepoDirectory == "." && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_REPO_DIRECTORY")))
+            settings.RepoDirectory = Environment.GetEnvironmentVariable("INPUT_REPO_DIRECTORY")!;
+        if (settings.ConfigPath == ".gitgavel.yml" && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_CONFIG_PATH")))
+            settings.ConfigPath = Environment.GetEnvironmentVariable("INPUT_CONFIG_PATH")!;
+        if (string.IsNullOrWhiteSpace(settings.Repository) && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_REPOSITORY")))
+            settings.Repository = Environment.GetEnvironmentVariable("INPUT_REPOSITORY");
+
         var repoDir = Path.GetFullPath(settings.RepoDirectory);
         DotEnvLoader.Load(repoDir);
-        var (commitSha, branch) = GitMetadataHelper.GetGitMetadata(repoDir);
+        var (commitSha, branch) = _gitService.GetGitMetadata(repoDir);
         var configPath = Path.IsPathRooted(settings.ConfigPath)
             ? settings.ConfigPath
             : Path.Combine(repoDir, settings.ConfigPath);
@@ -104,11 +126,11 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         // 2. System 2 Discovery Execution
         var apiKey = KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
 
-        ILlmClient llmClient = (settings.UseMock || settings.UseMockLlm)
-            ? new MockLlmClient()
-            : new GeminiLlmClient(apiKey);
+        var llmClientFactory = new LlmClientFactory(
+            forceMock: settings.UseMock || settings.UseMockLlm,
+            fallbackClient: new GeminiLlmClient(apiKey));
 
-        var orchestrator = new SubagentOrchestrator(llmClient);
+        var orchestrator = new SubagentOrchestrator(llmClientFactory);
         OrchestrationResult orchestrationResult = null!;
 
         await AnsiConsole.Status()
@@ -165,7 +187,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.WriteLine();
 
         var explicitRepo = settings.Repository ?? config.Github.Repository;
-        var (owner, repo) = GitHubService.ResolveRepoCoordinates(repoDir, explicitRepo);
+        var (owner, repo) = _gitService.ResolveRepoCoordinates(repoDir, explicitRepo);
         IGitHubService gitHubService = settings.UseMock || settings.DryRun
             ? new MockGitHubService()
             : new GitHubService();

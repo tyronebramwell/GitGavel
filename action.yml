@@ -10,12 +10,24 @@ inputs:
     description: "Path to .gitgavel.yml configuration file"
     required: false
     default: ".gitgavel.yml"
+  repo_directory:
+    description: "Path to repository root directory to audit"
+    required: false
+    default: "."
+  repository:
+    description: "GitHub repository coordinates ('owner/repo')"
+    required: false
+    default: ""
   dry_run:
     description: "Perform audit without modifying GitHub issues or projects"
     required: false
     default: "false"
   mock:
     description: "Run in offline mock mode"
+    required: false
+    default: "false"
+  mock_llm:
+    description: "Use simulated mock LLM subagents while preserving live TypeSafe Jev triage"
     required: false
     default: "false"
 
@@ -26,3 +38,5 @@ runs:
     - "audit"
     - "--config"
     - "${{ inputs.config_path }}"
+    - "--dir"
+    - "${{ inputs.repo_directory }}"

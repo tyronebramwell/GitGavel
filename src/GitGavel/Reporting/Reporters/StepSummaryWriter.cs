@@ -5,9 +5,9 @@ namespace GitGavel.Reporting.Reporters;
 
 public static class StepSummaryWriter
 {
-    public static async Task WriteAsync(ReportContext ctx, CancellationToken ct = default)
+    public static async Task WriteAsync(ReportContext ctx, string? customSummaryPath = null, CancellationToken ct = default)
     {
-        var summaryPath = Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
+        var summaryPath = customSummaryPath ?? Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
         if (string.IsNullOrWhiteSpace(summaryPath)) return;
 
         var sb = new StringBuilder();
@@ -40,7 +40,10 @@ public static class StepSummaryWriter
 
             foreach (var item in acceptedItems)
             {
-                sb.AppendLine($"| **{item.PriorityLabel}** | `{item.Finding.Category}` | {item.Finding.Title} | `{item.Finding.FilePath}:{item.Finding.StartLine}` | {item.JevScore:F1}/5.0 |");
+                var title = EscapeCell(item.Finding.Title);
+                var cat = EscapeCell(item.Finding.Category);
+                var file = EscapeCell(item.Finding.FilePath);
+                sb.AppendLine($"| **{item.PriorityLabel}** | `{cat}` | {title} | `{file}:{item.Finding.StartLine}` | {item.JevScore:F1}/5.0 |");
             }
             sb.AppendLine();
         }
@@ -57,4 +60,7 @@ public static class StepSummaryWriter
             // Do not crash the run if writing to step summary fails
         }
     }
+
+    private static string EscapeCell(string text) =>
+        string.IsNullOrEmpty(text) ? "" : text.Replace("|", "\\|").Replace("\r", " ").Replace("\n", " ");
 }

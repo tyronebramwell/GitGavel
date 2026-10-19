@@ -42,11 +42,23 @@ public class SpecDriftAgent : ISubagent
         }
 
         promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Key Source Code Files:");
-        foreach (var src in context.SourceFiles.Take(10))
+        promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
+        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
+        foreach (var sum in summaries)
+        {
+            var symbolList = sum.Symbols.Count > 0
+                ? string.Join(", ", sum.Symbols.Select(s => $"{s.Kind} {s.Name}"))
+                : "None";
+            promptBuilder.AppendLine($"- File: `{sum.RelativePath}` | Symbols: {symbolList}");
+        }
+
+        promptBuilder.AppendLine();
+        promptBuilder.AppendLine("### Source Code Implementation:");
+        // Provide all scanned source files so the LLM has complete visibility of the implementation
+        foreach (var src in context.SourceFiles)
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
-            promptBuilder.AppendLine(src.Content.Length > 3000 ? src.Content[..3000] + "\n...(truncated)" : src.Content);
+            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
         }
 
         promptBuilder.AppendLine();

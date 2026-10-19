@@ -10,9 +10,6 @@ public static class KeyResolver
         {
             var val = Environment.GetEnvironmentVariable(envVarName);
             if (!string.IsNullOrWhiteSpace(val)) return val;
-
-            // If the user pasted their raw API key directly into the apiKeyEnv field
-            if (IsRawKey(envVarName)) return envVarName;
         }
 
         foreach (var fb in fallbackEnvVarNames)
@@ -22,15 +19,5 @@ public static class KeyResolver
         }
 
         return null;
-    }
-
-    public static bool IsRawKey(string value)
-    {
-        if (string.IsNullOrWhiteSpace(value)) return false;
-        return value.StartsWith("apikey_", StringComparison.OrdinalIgnoreCase) ||
-               value.StartsWith("AIzaSy", StringComparison.OrdinalIgnoreCase) ||
-               value.StartsWith("ghp_", StringComparison.OrdinalIgnoreCase) ||
-               value.StartsWith("github_pat_", StringComparison.OrdinalIgnoreCase) ||
-               value.Length > 40;
     }
 }

@@ -97,12 +97,16 @@ public class FileScanner
             }
         }
 
+        // 4. Precompute AST complexity analysis for source files
+        var astSummaries = AstAnalyzer.AnalyzeAll(sourceFiles);
+
         return new RepoContext
         {
             RootDirectory = rootDirectory,
             SpecFiles = specFiles,
             SourceFiles = sourceFiles,
-            SarifFindings = sarifFindings
+            SarifFindings = sarifFindings,
+            AstSummaries = astSummaries
         };
     }
 

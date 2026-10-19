@@ -1,18 +1,21 @@
 using System.Text;
 using GitGavel.System1.Models;
 
+using GitGavel.Configuration;
+
 namespace GitGavel.Reporting.Reporters;
 
-public static class AuditRunReporter
+public class AuditRunReporter : BaseMarkdownReporter
 {
+    public override string ReportName => "AuditRun";
+    protected override string FileName => "1_audit-run.md";
+    protected override bool IsEnabled(ReportsSelection reports) => reports.AuditRun;
+    protected override string GenerateReportMarkdown(ReportContext context) => Generate(context);
+
     public static string Generate(ReportContext ctx)
     {
         var sb = new StringBuilder();
-
-        sb.AppendLine("# GitGavel Audit Run Log");
-        sb.AppendLine();
-        sb.AppendLine($"> Generated at **{ctx.EndTimeUtc:yyyy-MM-dd HH:mm:ss} UTC** | Commit: `{ctx.GitCommitSha}` | Branch: `{ctx.GitBranch}`");
-        sb.AppendLine();
+        AppendReportMetadataHeader(sb, "GitGavel Audit Run Log", ctx);
 
         // 1. Execution Metrics
         sb.AppendLine("## 1. Execution Metrics");

@@ -3,7 +3,7 @@ version: 1
 # Scope of files to audit
 scope:
   specs:
-    include: ["docs/**/*.md", "specs/**/*.md", "api/openapi.json", "SPECIFICATION.md"]
+    include: ["docs/**/*.md", "specs/**/*.md", "api/openapi.json", "SPECIFICATION.md", "Dockerfile", "action.yml"]
   source:
     include: ["**/*.cs", "**/*.ts", "**/*.py"]
     exclude: ["**/bin/**", "**/obj/**", "**/*.Tests/**", "**/.git/**"]
@@ -58,5 +58,6 @@ github:
     columns:
       backlog: "Backlog"
       humanReview: "AI Triage"
+      discard: "Discarded"
     fields:
       priority: "Priority" # Maps Jev Score (1-5) to Project Priority

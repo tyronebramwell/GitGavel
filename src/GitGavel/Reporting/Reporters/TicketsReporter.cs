@@ -2,23 +2,43 @@ using System.Text;
 using System.Text.Json;
 using GitGavel.System1.Models;
 
+using GitGavel.Configuration;
+
 namespace GitGavel.Reporting.Reporters;
 
-public static class TicketsReporter
+public class TicketsReporter : BaseMarkdownReporter
 {
+    public override string ReportName => "Tickets";
+    protected override string FileName => "2_tickets-report.md";
+    protected override bool IsEnabled(ReportsSelection reports) => reports.Tickets;
+    protected override string GenerateReportMarkdown(ReportContext context) => Generate(context);
+
     private static readonly JsonSerializerOptions JsonOpts = new()
     {
         WriteIndented = true
     };
 
-    public static string GenerateMarkdown(ReportContext ctx)
+    public override async Task<IEnumerable<string>> GenerateReportsAsync(ReportContext context, string outputDirectory, CancellationToken ct = default)
+    {
+        var files = (await base.GenerateReportsAsync(context, outputDirectory, ct)).ToList();
+
+        var repConfig = context.Config.Reporting;
+        if (IsEnabled(repConfig.Reports) && repConfig.Formats.Any(f => f.Equals("json", StringComparison.OrdinalIgnoreCase)))
+        {
+            var json = GenerateJson(context);
+            var path = await WriteReportFileAsync(outputDirectory, "2_tickets-report.json", json, ct);
+            files.Add(path);
+        }
+
+        return files;
+    }
+
+    public static string GenerateMarkdown(ReportContext ctx) => Generate(ctx);
+
+    public static string Generate(ReportContext ctx)
     {
         var sb = new StringBuilder();
-
-        sb.AppendLine("# GitGavel Tickets Report");
-        sb.AppendLine();
-        sb.AppendLine($"> Generated at **{ctx.EndTimeUtc:yyyy-MM-dd HH:mm:ss} UTC** | Commit: `{ctx.GitCommitSha}`");
-        sb.AppendLine();
+        AppendReportMetadataHeader(sb, "GitGavel Tickets Report", ctx);
 
         // 1. Created / Accepted Issues
         var accepted = ctx.TriageDecisions.Where(d => d.Status == TriageStatus.AcceptedToBacklog).ToList();
@@ -37,7 +57,10 @@ public static class TicketsReporter
             for (var i = 0; i < accepted.Count; i++)
             {
                 var d = accepted[i];
-                sb.AppendLine($"| {i + 1} | **{d.PriorityLabel}** | `{d.Finding.Category}` | {d.Finding.Title} | `{d.Finding.FilePath}:{d.Finding.StartLine}` | {d.JevScore:F1}/5.0 | `{d.TargetColumn}` |");
+                var cat = EscapeCell(d.Finding.Category);
+                var title = EscapeCell(d.Finding.Title);
+                var file = EscapeCell(d.Finding.FilePath);
+                sb.AppendLine($"| {i + 1} | **{d.PriorityLabel}** | `{cat}` | {title} | `{file}:{d.Finding.StartLine}` | {d.JevScore:F1}/5.0 | `{d.TargetColumn}` |");
             }
         }
         sb.AppendLine();
@@ -59,8 +82,12 @@ public static class TicketsReporter
             for (var i = 0; i < review.Count; i++)
             {
                 var d = review[i];
+                var cat = EscapeCell(d.Finding.Category);
+                var title = EscapeCell(d.Finding.Title);
+                var file = EscapeCell(d.Finding.FilePath);
+                var reason = EscapeCell(d.Reason ?? "");
                 var match = d.DuplicateOfIssueNumber.HasValue ? $"#{d.DuplicateOfIssueNumber} (P={d.DuplicateProbability:P0})" : "N/A";
-                sb.AppendLine($"| {i + 1} | **{d.PriorityLabel}** | `{d.Finding.Category}` | {d.Finding.Title} | `{d.Finding.FilePath}:{d.Finding.StartLine}` | {d.Reason} | {match} |");
+                sb.AppendLine($"| {i + 1} | **{d.PriorityLabel}** | `{cat}` | {title} | `{file}:{d.Finding.StartLine}` | {reason} | {match} |");
             }
         }
         sb.AppendLine();
@@ -82,7 +109,9 @@ public static class TicketsReporter
             for (var i = 0; i < duplicates.Count; i++)
             {
                 var d = duplicates[i];
-                sb.AppendLine($"| {i + 1} | `{d.Finding.Category}` | {d.Finding.Title} | #{d.DuplicateOfIssueNumber} | **{d.DuplicateProbability:P0}** | Suppressed (Creation Skipped) |");
+                var cat = EscapeCell(d.Finding.Category);
+                var title = EscapeCell(d.Finding.Title);
+                sb.AppendLine($"| {i + 1} | `{cat}` | {title} | #{d.DuplicateOfIssueNumber} | **{d.DuplicateProbability:P0}** | Suppressed (Creation Skipped) |");
             }
         }
         sb.AppendLine();

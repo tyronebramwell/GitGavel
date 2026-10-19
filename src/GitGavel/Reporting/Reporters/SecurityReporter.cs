@@ -1,17 +1,20 @@
 using System.Text;
 
+using GitGavel.Configuration;
+
 namespace GitGavel.Reporting.Reporters;
 
-public static class SecurityReporter
+public class SecurityReporter : BaseMarkdownReporter
 {
+    public override string ReportName => "Security";
+    protected override string FileName => "3_security-report.md";
+    protected override bool IsEnabled(ReportsSelection reports) => reports.Security;
+    protected override string GenerateReportMarkdown(ReportContext context) => Generate(context);
+
     public static string Generate(ReportContext ctx)
     {
         var sb = new StringBuilder();
-
-        sb.AppendLine("# GitGavel Security Audit Report");
-        sb.AppendLine();
-        sb.AppendLine($"> Generated at **{ctx.EndTimeUtc:yyyy-MM-dd HH:mm:ss} UTC** | Commit: `{ctx.GitCommitSha}`");
-        sb.AppendLine();
+        AppendReportMetadataHeader(sb, "GitGavel Security Audit Report", ctx);
 
         // Filter security findings from all findings
         var securityFindings = ctx.Orchestration.AllFindings
@@ -68,23 +71,6 @@ public static class SecurityReporter
             sb.AppendLine(f.SuggestedRemediation);
             sb.AppendLine("```");
             sb.AppendLine();
-
-            // Correlate with SARIF findings if applicable
-            var matchedSarif = ctx.RepoContext.SarifFindings
-                .Where(s => s.FilePath.Contains(f.FilePath, StringComparison.OrdinalIgnoreCase) ||
-                            f.FilePath.Contains(s.FilePath, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-
-            if (matchedSarif.Count > 0)
-            {
-                sb.AppendLine("#### 🔗 Static Scanner Correlation (SARIF)");
-                foreach (var s in matchedSarif)
-                {
-                    sb.AppendLine($"- **Rule**: `{s.RuleId}` ({s.Level}) on line {s.StartLine}: {s.Message}");
-                }
-                sb.AppendLine();
-            }
-
             sb.AppendLine("---");
             sb.AppendLine();
         }

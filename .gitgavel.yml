@@ -3,6 +3,8 @@ scope:
   specs:
     include:
     - SPECIFICATION.md
+    - Dockerfile
+    - action.yml
     - docs/**/*.md
     - specs/**/*.md
     - api/openapi.json
@@ -61,5 +63,6 @@ github:
     columns:
       backlog: Backlog
       humanReview: AI Triage
+      discard: Discarded
     fields:
       priority: Priority

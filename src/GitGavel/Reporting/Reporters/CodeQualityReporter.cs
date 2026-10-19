@@ -1,18 +1,21 @@
 using System.Text;
 using GitGavel.Discovery;
 
+using GitGavel.Configuration;
+
 namespace GitGavel.Reporting.Reporters;
 
-public static class CodeQualityReporter
+public class CodeQualityReporter : BaseMarkdownReporter
 {
+    public override string ReportName => "CodeQuality";
+    protected override string FileName => "4_code-quality-report.md";
+    protected override bool IsEnabled(ReportsSelection reports) => reports.CodeQuality;
+    protected override string GenerateReportMarkdown(ReportContext context) => Generate(context);
+
     public static string Generate(ReportContext ctx)
     {
         var sb = new StringBuilder();
-
-        sb.AppendLine("# GitGavel Code Quality & Spec Report");
-        sb.AppendLine();
-        sb.AppendLine($"> Generated at **{ctx.EndTimeUtc:yyyy-MM-dd HH:mm:ss} UTC** | Commit: `{ctx.GitCommitSha}`");
-        sb.AppendLine();
+        AppendReportMetadataHeader(sb, "GitGavel Code Quality & Spec Report", ctx);
 
         // 1. Spec Drift Analysis
         var specDriftFindings = ctx.Orchestration.AllFindings
@@ -51,7 +54,7 @@ public static class CodeQualityReporter
         }
 
         // 2. Architectural Complexity Hotspots
-        var astSummaries = AstAnalyzer.AnalyzeAll(ctx.RepoContext.SourceFiles);
+        var astSummaries = ctx.RepoContext.AstSummaries;
         var hotspots = astSummaries.Where(s => s.IsComplexityHotspot).OrderByDescending(s => s.TotalComplexityScore).ToList();
 
         sb.AppendLine($"## 2. Architectural Hotspots ({hotspots.Count} flagged)");
@@ -59,36 +62,37 @@ public static class CodeQualityReporter
 
         if (hotspots.Count == 0)
         {
-            sb.AppendLine("✅ **No severe cyclomatic complexity hotspots detected.**");
+            sb.AppendLine("✅ **No high-complexity hotspots flagged.** All files maintain healthy cyclomatic branching metrics.");
         }
         else
         {
             sb.AppendLine("| File Path | Complexity Score | Declared Symbols | Status |");
             sb.AppendLine("| :--- | :--- | :--- | :--- |");
-            foreach (var spot in hotspots)
+
+            foreach (var h in hotspots)
             {
-                sb.AppendLine($"| `{spot.RelativePath}` | **{spot.TotalComplexityScore}** | {spot.Symbols.Count} symbols | ⚠️ High Branching Density |");
+                sb.AppendLine($"| `{h.RelativePath}` | **{h.TotalComplexityScore}** | {h.Symbols.Count} symbols | ⚠️ High Branching Density |");
             }
-            sb.AppendLine();
         }
+        sb.AppendLine();
 
         // 3. Refactoring Catalog
-        var refactorFindings = ctx.Orchestration.AllFindings
+        var refactoringFindings = ctx.Orchestration.AllFindings
             .Where(f => f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        sb.AppendLine($"## 3. Refactoring & Maintainability Catalog ({refactorFindings.Count} recommendations)");
+        sb.AppendLine($"## 3. Refactoring & Maintainability Catalog ({refactoringFindings.Count} recommendations)");
         sb.AppendLine();
 
-        if (refactorFindings.Count == 0)
+        if (refactoringFindings.Count == 0)
         {
             sb.AppendLine("✅ **No urgent refactoring debt flagged.**");
         }
         else
         {
-            for (var i = 0; i < refactorFindings.Count; i++)
+            for (var i = 0; i < refactoringFindings.Count; i++)
             {
-                var f = refactorFindings[i];
+                var f = refactoringFindings[i];
                 sb.AppendLine($"### 3.{i + 1} [{f.Severity}] {f.Title}");
                 sb.AppendLine($"- **Target**: `{f.FilePath}` (lines {f.StartLine}–{f.EndLine})");
                 sb.AppendLine();
