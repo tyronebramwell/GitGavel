@@ -309,7 +309,6 @@ RUN dotnet publish src/GitGavel/GitGavel.csproj \
     -r linux-musl-x64 \
     --self-contained true \
     -p:PublishSingleFile=true \
-    -p:PublishTrimmed=true \
     -o /app/publish
 
 # Runtime stage
