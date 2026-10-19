@@ -314,9 +314,17 @@ RUN dotnet publish src/GitGavel/GitGavel.csproj \
 
 # Runtime stage
 FROM alpine:3.20
-RUN apk add --no-cache git ca-certificates
+RUN apk add --no-cache \
+    git \
+    ca-certificates \
+    libgcc \
+    libstdc++ \
+    icu-libs \
+    libssl3 \
+    zlib
 WORKDIR /app
 COPY --from=build /app/publish/GitGavel /usr/local/bin/gitgavel
+RUN chmod +x /usr/local/bin/gitgavel
 
 ENTRYPOINT ["gitgavel"]
 ```
