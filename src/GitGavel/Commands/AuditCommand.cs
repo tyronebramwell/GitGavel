@@ -301,12 +301,12 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
                 catch (Octokit.NotFoundException)
                 {
                     AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Repository [bold]{owner}/{repo}[/] was not found on GitHub (404 Not Found).");
-                    AnsiConsole.MarkupLine("  [grey]Please verify that the repository exists on GitHub, your GITHUB_TOKEN has access to it, or run with [cyan]--dry-run[/].[/]\n");
+                    AnsiConsole.MarkupLine("  [grey]Please verify that the repository exists on GitHub, your GH_TOKEN has access to it, or run with [cyan]--dry-run[/].[/]\n");
                 }
                 catch (Octokit.AuthorizationException)
                 {
                     AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Authentication failed (401/403 Unauthorized).");
-                    AnsiConsole.MarkupLine("  [grey]Please verify that your GITHUB_TOKEN has [bold]issues:write[/] and [bold]project:write[/] permissions.[/]\n");
+                    AnsiConsole.MarkupLine("  [grey]Please verify that your GH_TOKEN has [bold]issues:write[/] and [bold]project:write[/] permissions.[/]\n");
                 }
                 catch (Exception ex)
                 {

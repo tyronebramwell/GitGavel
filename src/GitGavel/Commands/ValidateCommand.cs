@@ -63,9 +63,9 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         envTable.AddRow(jevLabel, "Jev Decision Engine (Noul, Score, Choice)", jevStatus);
 
         // 3. GitHub Token Check
-        var ghToken = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        var ghToken = Environment.GetEnvironmentVariable("GH_TOKEN") ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN");
         var ghStatus = !string.IsNullOrWhiteSpace(ghToken) ? "[green]Configured[/]" : "[red]Missing (Required)[/]";
-        envTable.AddRow("GITHUB_TOKEN", "GitHub Issues and Projects v2 integration", ghStatus);
+        envTable.AddRow("GH_TOKEN", "GitHub Issues and Projects v2 integration", ghStatus);
 
         AnsiConsole.Write(envTable);
         return 0;

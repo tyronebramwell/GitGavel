@@ -95,7 +95,7 @@ GEMINI_API_KEY=your_gemini_api_key_here
 JEV_API_KEY=your_jev_api_key_here
 
 # Required for publishing GitHub Issues & Projects v2 mutations
-GITHUB_TOKEN=your_github_personal_access_token_here
+GH_TOKEN=your_github_personal_access_token_here
 ```
 
 ### 3. Run an Audit
@@ -251,7 +251,7 @@ jobs:
         with:
           config_path: .gitgavel.yml
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
       - name: Upload Audit Reports

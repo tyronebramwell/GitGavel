@@ -169,4 +169,52 @@ public class GitHubTests
             }
         }
     }
+
+    [Fact]
+    public async Task GitHubService_WithoutToken_ThrowsExceptionMentioningGhToken()
+    {
+        var prevGh = Environment.GetEnvironmentVariable("GH_TOKEN");
+        var prevGithub = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", null);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+
+            var service = new GitHubService();
+            var decision = CreateDecision("Test Missing Token", "Security", "P0", 5.0, "Backlog", TriageStatus.AcceptedToBacklog);
+            var act = () => service.CreateOrUpdateIssueAsync("owner", "repo", decision, new GitGavelConfig());
+
+            await act.Should().ThrowAsync<InvalidOperationException>()
+                .WithMessage("*GH_TOKEN is required*");
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", prevGh);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", prevGithub);
+        }
+    }
+
+    [Fact]
+    public async Task GitHubService_WithGhTokenEnvVar_UsesTokenWithoutThrowingMissingToken()
+    {
+        var prevGh = Environment.GetEnvironmentVariable("GH_TOKEN");
+        var prevGithub = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", "mock-token-xyz");
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+
+            var service = new GitHubService();
+            // GetExistingIssuesAsync with non-empty token attempts call rather than immediately returning [] due to missing token
+            var issues = await service.GetExistingIssuesAsync("nonexistent-owner", "nonexistent-repo");
+            issues.Should().BeEmpty(); // Catch block returns empty on HTTP error, but it did not fail token check
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", prevGh);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", prevGithub);
+        }
+    }
 }

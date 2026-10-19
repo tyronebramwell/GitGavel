@@ -22,7 +22,7 @@ jobs:
         with:
           config_path: .gitgavel.yml
         env:
-          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
           AI_API_KEY: ${{ secrets.AI_API_KEY }}
           JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
 

@@ -16,7 +16,7 @@ public class GitHubService : IGitHubService
 
     public GitHubService(string? token = null, HttpClient? httpClient = null)
     {
-        _token = token ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? "";
+        _token = token ?? Environment.GetEnvironmentVariable("GH_TOKEN") ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN") ?? "";
         _client = new GitHubClient(new Octokit.ProductHeaderValue("GitGavel"))
         {
             Credentials = string.IsNullOrWhiteSpace(_token) ? Credentials.Anonymous : new Credentials(_token)
@@ -69,7 +69,7 @@ public class GitHubService : IGitHubService
     {
         if (string.IsNullOrWhiteSpace(_token))
         {
-            throw new InvalidOperationException("GITHUB_TOKEN is required to create issues on GitHub.");
+            throw new InvalidOperationException("GH_TOKEN is required to create issues on GitHub.");
         }
 
         var labels = new List<string>(config.Github.Labels);
