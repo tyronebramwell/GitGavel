@@ -488,4 +488,139 @@ public class System2Tests
         capturedPrompt.Should().Contain("### Repository Architecture & Symbol Map:");
         capturedPrompt.Should().Contain("SubagentOrchestrator");
     }
+
+    [Fact]
+    public async Task SubagentOrchestrator_ParameterlessConstructor_InitializesDefaultFactory()
+    {
+        var orchestrator = new SubagentOrchestrator();
+        var config = new GitGavelConfig();
+        config.Subagents.SpecDrift.Provider = "mock";
+        config.Subagents.Security.Provider = "mock";
+        config.Subagents.Refactoring.Provider = "mock";
+        config.Subagents.Tests.Provider = "mock";
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 10, 50, "# Spec", true)],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 10, 50, "public class App {}", false)],
+            SarifFindings = []
+        };
+
+        var result = await orchestrator.RunAllAsync(repoContext, config);
+        result.SubagentResults.Should().HaveCount(4);
+        result.AllFindings.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task AuditCommand_WithInjectedOrchestrator_UsesInjectedOrchestratorInstance()
+    {
+        var customOrchestratorCalled = false;
+        var mockOrchestrator = new Moq.Mock<ISubagentOrchestrator>();
+        mockOrchestrator
+            .Setup(o => o.RunAllAsync(Moq.It.IsAny<RepoContext>(), Moq.It.IsAny<GitGavelConfig>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback(() => customOrchestratorCalled = true)
+            .Returns(Task.FromResult(new OrchestrationResult { AllFindings = [], SubagentResults = [] }));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_cmd_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var cmd = new GitGavel.Commands.AuditCommand(orchestrator: mockOrchestrator.Object);
+            var remaining = new Moq.Mock<Spectre.Console.Cli.IRemainingArguments>();
+            var cmdCtx = new Spectre.Console.Cli.CommandContext([], remaining.Object, "audit", null);
+            var settings = new GitGavel.Commands.AuditCommand.Settings
+            {
+                RepoDirectory = tempDir,
+                DryRun = true,
+                UseMock = true
+            };
+
+            var exitCode = await cmd.ExecuteAsync(cmdCtx, settings, CancellationToken.None);
+
+            exitCode.Should().Be(0);
+            customOrchestratorCalled.Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task System2Agents_PromptTruncationLimits_EnforceExactBoundaries(bool exceedLimitByOne)
+    {
+        var capturedPrompts = new List<string>();
+        var mockClient = new MockLlmClient(req =>
+        {
+            lock (capturedPrompts)
+            {
+                capturedPrompts.Add(req.Prompt);
+            }
+
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 10,
+                CompletionTokens = 5,
+                DurationMs = 1,
+                ModelUsed = req.Model
+            };
+        });
+
+        var specLen = exceedLimitByOne ? 32001 : 32000;
+        var srcLen = exceedLimitByOne ? 8001 : 8000;
+        var diffLen = exceedLimitByOne ? 4001 : 4000;
+        var issueSrcLen = exceedLimitByOne ? 6001 : 6000;
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 100, specLen, new string('S', specLen), true)],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 100, srcLen, new string('C', srcLen), false, false, new string('D', diffLen))],
+            TestFiles = [new ScannedFile("tests/AppTests.cs", "/mock/tests/AppTests.cs", 100, srcLen, new string('T', srcLen), false, true, new string('P', diffLen))],
+            SarifFindings = []
+        };
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
+        await orchestrator.RunAllAsync(repoContext, new GitGavelConfig());
+
+        capturedPrompts.Should().HaveCount(4);
+        foreach (var prompt in capturedPrompts)
+        {
+            if (exceedLimitByOne)
+            {
+                prompt.Should().Contain("...(truncated)");
+            }
+            else
+            {
+                prompt.Should().NotContain("...(truncated)");
+            }
+        }
+
+        // Also verify IssueResolutionAgent 6000-character boundary
+        capturedPrompts.Clear();
+        var issueAgent = new IssueResolutionAgent(mockClient);
+        var issueRepoCtx = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/IssueFile.cs", "/mock/src/IssueFile.cs", 100, issueSrcLen, new string('X', issueSrcLen), false)],
+            SarifFindings = []
+        };
+
+        await issueAgent.EvaluateOpenIssuesAsync([new ExistingIssue(1, "Issue 1", "Body", "open")], issueRepoCtx);
+        capturedPrompts.Should().ContainSingle();
+        if (exceedLimitByOne)
+        {
+            capturedPrompts[0].Should().Contain("...(truncated)");
+        }
+        else
+        {
+            capturedPrompts[0].Should().NotContain("...(truncated)");
+        }
+    }
 }
