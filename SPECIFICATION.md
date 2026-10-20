@@ -353,7 +353,8 @@ jobs:
           config_path: .gitgavel.yml
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.AI_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY || secrets.GEMINI_API_KEY }}
           JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
 
       # Upload all five reports as downloadable workflow artifacts

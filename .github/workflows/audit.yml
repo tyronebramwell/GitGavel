@@ -4,6 +4,17 @@ on:
   schedule:
     - cron: '0 3 * * 1'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Run in dry-run mode (preview only, no GitHub writes)"
+        required: false
+        type: boolean
+        default: false
+      mock:
+        description: "Run in offline mock mode (no API keys required)"
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   issues: write
@@ -21,9 +32,12 @@ jobs:
         uses: ./
         with:
           config_path: .gitgavel.yml
+          dry_run: ${{ inputs.dry_run || false }}
+          mock: ${{ inputs.mock || false }}
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          AI_API_KEY: ${{ secrets.AI_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.AI_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY || secrets.GEMINI_API_KEY }}
           JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
 
       - name: Upload Audit Reports
