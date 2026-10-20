@@ -20,10 +20,12 @@ namespace GitGavel.Commands;
 public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 {
     private readonly IGitService _gitService;
+    private readonly ISubagentOrchestrator? _injectedOrchestrator;
 
-    public AuditCommand(IGitService? gitService = null)
+    public AuditCommand(IGitService? gitService = null, ISubagentOrchestrator? orchestrator = null)
     {
         _gitService = gitService ?? new GitService();
+        _injectedOrchestrator = orchestrator;
     }
 
     public class Settings : CommandSettings
@@ -173,7 +175,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             forceMock: settings.UseMock || settings.UseMockLlm,
             fallbackClient: new GeminiLlmClient(apiKey));
 
-        var orchestrator = new SubagentOrchestrator(llmClientFactory);
+        ISubagentOrchestrator orchestrator = _injectedOrchestrator ?? new SubagentOrchestrator(llmClientFactory);
         OrchestrationResult orchestrationResult = null!;
 
         await AnsiConsole.Status()
