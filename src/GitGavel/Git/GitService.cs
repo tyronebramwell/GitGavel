@@ -65,6 +65,90 @@ public class GitService : IGitService
         return ("local-owner", "GitGavel");
     }
 
+    public IReadOnlyList<GitCommitRecord> GetRecentCommits(string workingDirectory, int maxCount = 50)
+    {
+        if (maxCount <= 0) return [];
+
+        var output = RunGitCommand(workingDirectory, $"log -n {maxCount} --name-only --pretty=format:COMMIT_START|%H|%h|%an|%aI|%s");
+        if (string.IsNullOrWhiteSpace(output)) return [];
+
+        var commits = new List<GitCommitRecord>();
+        var lines = output.Split('\n', StringSplitOptions.TrimEntries);
+
+        string? sha = null;
+        string? shortSha = null;
+        string? author = null;
+        string? dateIso = null;
+        string? subject = null;
+        var changedFiles = new List<string>();
+
+        void FlushCurrent()
+        {
+            if (!string.IsNullOrWhiteSpace(sha))
+            {
+                commits.Add(new GitCommitRecord(
+                    Sha: sha,
+                    ShortSha: shortSha ?? sha[..Math.Min(7, sha.Length)],
+                    Subject: subject ?? "",
+                    Author: author ?? "unknown",
+                    DateIso: dateIso ?? "",
+                    ChangedFiles: [.. changedFiles]
+                ));
+            }
+        }
+
+        foreach (var line in lines)
+        {
+            if (string.IsNullOrWhiteSpace(line)) continue;
+
+            if (line.StartsWith("COMMIT_START|", StringComparison.Ordinal))
+            {
+                FlushCurrent();
+                changedFiles.Clear();
+
+                var parts = line.Split('|', 6);
+                sha = parts.Length > 1 ? parts[1] : "";
+                shortSha = parts.Length > 2 ? parts[2] : "";
+                author = parts.Length > 3 ? parts[3] : "";
+                dateIso = parts.Length > 4 ? parts[4] : "";
+                subject = parts.Length > 5 ? parts[5] : "";
+            }
+            else if (sha != null)
+            {
+                changedFiles.Add(line);
+            }
+        }
+
+        FlushCurrent();
+        return commits;
+    }
+
+    public int? ResolvePullRequestNumber(int? explicitPrNumber = null)
+    {
+        if (explicitPrNumber is > 0) return explicitPrNumber;
+
+        var envPr = Environment.GetEnvironmentVariable("INPUT_PR_NUMBER")
+                    ?? Environment.GetEnvironmentVariable("PR_NUMBER")
+                    ?? Environment.GetEnvironmentVariable("GITHUB_PR_NUMBER");
+        if (int.TryParse(envPr, out var parsedPr) && parsedPr > 0)
+        {
+            return parsedPr;
+        }
+
+        // GitHub Actions sets GITHUB_REF to "refs/pull/<pr_number>/merge" on pull_request events
+        var ghRef = Environment.GetEnvironmentVariable("GITHUB_REF");
+        if (!string.IsNullOrWhiteSpace(ghRef) && ghRef.StartsWith("refs/pull/", StringComparison.OrdinalIgnoreCase))
+        {
+            var segments = ghRef.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (segments.Length >= 3 && int.TryParse(segments[2], out var refPr) && refPr > 0)
+            {
+                return refPr;
+            }
+        }
+
+        return null;
+    }
+
     public string? RunGitCommand(string workingDirectory, string args)
     {
         try

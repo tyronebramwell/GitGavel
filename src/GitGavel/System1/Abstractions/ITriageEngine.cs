@@ -17,4 +17,16 @@ public interface ITriageEngine
         IReadOnlyList<ExistingIssue> existingIssues,
         GitGavelConfig config,
         CancellationToken ct = default);
+
+    Task<List<PrCommentTriageDecision>> TriagePrReviewCommentsAsync(
+        IReadOnlyList<PrReviewCommentCandidate> candidates,
+        IReadOnlyList<ExistingPrReviewComment> existingComments,
+        GitGavelConfig config,
+        CancellationToken ct = default);
+
+    Task<List<IssueResolutionDecision>> VerifyIssueResolutionsAsync(
+        IReadOnlyList<IssueResolutionCandidate> candidates,
+        IReadOnlyList<ExistingIssue> openIssues,
+        GitGavelConfig config,
+        CancellationToken ct = default);
 }

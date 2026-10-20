@@ -108,4 +108,43 @@ public class GitServiceTests
         var result = gitService.RunGitCommand(Directory.GetCurrentDirectory(), "invalid-subcommand-12345");
         result.Should().BeNull();
     }
+
+    [Fact]
+    public void GitService_GetRecentCommits_InCurrentRepo_ReturnsCommitHistory()
+    {
+        var gitService = new GitService();
+        var commits = gitService.GetRecentCommits(Directory.GetCurrentDirectory(), 5);
+
+        commits.Should().NotBeEmpty();
+        commits[0].Sha.Should().NotBeNullOrWhiteSpace();
+        commits[0].ShortSha.Should().NotBeNullOrWhiteSpace();
+        commits[0].Subject.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public void GitService_ResolvePullRequestNumber_ResolvesFromExplicitEnvAndGithubRef()
+    {
+        var prevInputPr = Environment.GetEnvironmentVariable("INPUT_PR_NUMBER");
+        var prevRef = Environment.GetEnvironmentVariable("GITHUB_REF");
+        var gitService = new GitService();
+
+        try
+        {
+            Environment.SetEnvironmentVariable("INPUT_PR_NUMBER", null);
+            Environment.SetEnvironmentVariable("GITHUB_REF", null);
+
+            gitService.ResolvePullRequestNumber(42).Should().Be(42);
+
+            Environment.SetEnvironmentVariable("GITHUB_REF", "refs/pull/88/merge");
+            gitService.ResolvePullRequestNumber(null).Should().Be(88);
+
+            Environment.SetEnvironmentVariable("INPUT_PR_NUMBER", "99");
+            gitService.ResolvePullRequestNumber(null).Should().Be(99);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("INPUT_PR_NUMBER", prevInputPr);
+            Environment.SetEnvironmentVariable("GITHUB_REF", prevRef);
+        }
+    }
 }

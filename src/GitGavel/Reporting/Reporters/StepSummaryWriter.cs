@@ -21,12 +21,13 @@ public static class StepSummaryWriter
         var accepted = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog);
         var review = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview);
         var duplicates = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.SuppressedDuplicate);
+        var closedCount = ctx.IssueResolutionDecisions.Count(d => d.Action == IssueResolutionAction.CloseResolved);
 
         sb.AppendLine("### 📊 Triage Funnel Overview");
         sb.AppendLine();
-        sb.AppendLine("| Backlog Items | Review Items | Suppressed Duplicates | Scanned Files | Total Tokens |");
-        sb.AppendLine("| :---: | :---: | :---: | :---: | :---: |");
-        sb.AppendLine($"| **{accepted}** | **{review}** | **{duplicates}** | {ctx.RepoContext.TotalFilesScanned} | {ctx.Orchestration.TotalTokens:N0} |");
+        sb.AppendLine("| Backlog Items | Review Items | Closed Fixed Issues | Suppressed Duplicates | Scanned Files | Total Tokens |");
+        sb.AppendLine("| :---: | :---: | :---: | :---: | :---: | :---: |");
+        sb.AppendLine($"| **{accepted}** | **{review}** | **{closedCount}** | **{duplicates}** | {ctx.RepoContext.TotalFilesScanned} | {ctx.Orchestration.TotalTokens:N0} |");
         sb.AppendLine();
 
         // Top Accepted Backlog Tickets
@@ -48,7 +49,25 @@ public static class StepSummaryWriter
             sb.AppendLine();
         }
 
-        sb.AppendLine("> 💡 _All four detailed audit reports (`1_audit-run.md`, `2_tickets-report.md`, `3_security-report.md`, `4_code-quality-report.md`) are archived in the workflow artifacts._");
+        // Closed Issues
+        var closedItems = ctx.IssueResolutionDecisions.Where(d => d.Action == IssueResolutionAction.CloseResolved).ToList();
+        if (closedItems.Count > 0)
+        {
+            sb.AppendLine("### ✅ Completed & Closed Issues");
+            sb.AppendLine();
+            sb.AppendLine("| Issue # | Title | How It Was Fixed | Resolving Commits |");
+            sb.AppendLine("| :---: | :--- | :--- | :--- |");
+            foreach (var c in closedItems)
+            {
+                var commits = c.Candidate.ResolvingCommitSummaries.Count > 0
+                    ? EscapeCell(string.Join("; ", c.Candidate.ResolvingCommitSummaries))
+                    : EscapeCell(string.Join(", ", c.Candidate.ResolvingCommitShas));
+                sb.AppendLine($"| **#{c.Candidate.IssueNumber}** | {EscapeCell(c.Candidate.IssueTitle)} | {EscapeCell(c.Candidate.HowItWasFixed)} | {commits} |");
+            }
+            sb.AppendLine();
+        }
+
+        sb.AppendLine("> 💡 _All five detailed audit reports (`1_audit-run.md`, `2_tickets-report.md`, `3_security-report.md`, `4_code-quality-report.md`, `5_test-quality-report.md`) are archived in the workflow artifacts._");
         sb.AppendLine();
 
         try

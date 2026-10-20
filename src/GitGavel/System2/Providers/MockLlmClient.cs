@@ -21,7 +21,7 @@ public class MockLlmClient : ILlmClient
         string sampleJson;
         var p = request.Prompt;
 
-        if (p.Contains("Spec Drift Agent", StringComparison.OrdinalIgnoreCase))
+        if (p.StartsWith("You are the Spec Drift Agent", StringComparison.OrdinalIgnoreCase))
         {
             sampleJson = """
             [
@@ -44,7 +44,7 @@ public class MockLlmClient : ILlmClient
             ]
             """;
         }
-        else if (p.Contains("Security Auditor Agent", StringComparison.OrdinalIgnoreCase))
+        else if (p.StartsWith("You are the Security Auditor Agent", StringComparison.OrdinalIgnoreCase))
         {
             sampleJson = """
             [
@@ -64,6 +64,69 @@ public class MockLlmClient : ILlmClient
                   "[Microsoft Learn: Safe storage of app secrets in development](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets)",
                   "[Stack Overflow: Storing API secrets securely in .NET](https://stackoverflow.com/questions/tagged/asp.net-core-security)"
                 ]
+              }
+            ]
+            """;
+        }
+        else if (p.StartsWith("You are the Test Sentinel Agent", StringComparison.OrdinalIgnoreCase))
+        {
+            sampleJson = """
+            [
+              {
+                "title": "Missing Integration & E2E Tests for CLI Audit Pipeline",
+                "summary": "AuditCommand pipeline execution lacks end-to-end CLI verification covering report generation and issue closure workflows.",
+                "category": "Testing",
+                "severity": "High",
+                "testTier": "E2E",
+                "testDefectType": "MissingTest",
+                "filePath": "src/GitGavel/Commands/AuditCommand.cs",
+                "startLine": 57,
+                "endLine": 150,
+                "suggestedRemediation": "[Fact]\npublic async Task AuditCommand_DryRunMock_GeneratesAllFiveReports()\n{\n    var cmd = new AuditCommand();\n    // Assert exit code 0 and generated reports\n}",
+                "details": "End-to-end CLI test coverage ensures subagent orchestration, Jev triage, and reporting work cohesively.",
+                "references": [
+                  "[Microsoft Learn: Unit testing best practices with .NET](https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices)",
+                  "[Martin Fowler: Practical Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)",
+                  "[Stack Overflow: Automated test design patterns and assertions](https://stackoverflow.com/questions/tagged/unit-testing)"
+                ]
+              }
+            ]
+            """;
+        }
+        else if (p.StartsWith("You are the PR Review Auditor Agent", StringComparison.OrdinalIgnoreCase))
+        {
+            sampleJson = """
+            {
+              "summaryObservations": "Audited PR diff and existing review threads. Prior feedback on environment variable isolation was resolved; identified one missing boundary assertion in the updated service.",
+              "recommendedEvent": "COMMENT",
+              "resolvedThreadsNotes": [
+                "Confirmed that prior review thread regarding CI environment variable isolation in GitServiceTests.cs was resolved."
+              ],
+              "inlineComments": [
+                {
+                  "filePath": "src/GitGavel/Git/GitService.cs",
+                  "line": 75,
+                  "category": "Testing",
+                  "severity": "Medium",
+                  "title": "Add boundary test for negative commit lookback count",
+                  "body": "Ensure `GetRecentCommits` is covered by a unit test when `maxCount <= 0`.",
+                  "suggestedCode": "if (maxCount <= 0) return Array.Empty<GitCommitRecord>();"
+                }
+              ]
+            }
+            """;
+        }
+        else if (p.StartsWith("You are the Issue Resolution Agent", StringComparison.OrdinalIgnoreCase))
+        {
+            sampleJson = """
+            [
+              {
+                "issueNumber": 101,
+                "issueTitle": "Isolate CI environment variables in GitService fallback test",
+                "isResolved": true,
+                "howItWasFixed": "Cleared GITHUB_SHA, GITHUB_REF_NAME, and GITHUB_REPOSITORY environment variables within a try/finally block in GitServiceTests to prevent CI leakage.",
+                "resolvingCommitShas": ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"],
+                "resolvingCommitSummaries": ["`cfad09a` — *fix(tests): isolate CI environment variables in GitService fallback test*"]
               }
             ]
             """;

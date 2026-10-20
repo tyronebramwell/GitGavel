@@ -17,7 +17,7 @@ public class GeminiLlmClient : ILlmClient
             ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY")
             ?? Environment.GetEnvironmentVariable("AI_API_KEY")
             ?? "";
-        _httpClient = httpClient ?? new HttpClient();
+        _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
     }
 
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)

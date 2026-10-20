@@ -4,6 +4,7 @@ using System.Text;
 using System.Text.Json;
 using GitGavel.Configuration;
 using GitGavel.System1.Models;
+using GitGavel.System2.Models;
 using Octokit;
 
 namespace GitGavel.GitHub;
@@ -46,13 +47,15 @@ public class GitHubService : IGitHubService
 
             var issues = await _client.Issue.GetAllForRepository(owner, repo, req);
 
-            return issues.Select(i => new ExistingIssue(
-                Number: i.Number,
-                Title: i.Title,
-                Body: i.Body ?? "",
-                State: i.State.StringValue,
-                Labels: i.Labels.Select(l => l.Name).ToList()
-            )).ToList();
+            return issues
+                .Where(i => i.PullRequest == null)
+                .Select(i => new ExistingIssue(
+                    Number: i.Number,
+                    Title: i.Title,
+                    Body: i.Body ?? "",
+                    State: i.State.StringValue,
+                    Labels: i.Labels.Select(l => l.Name).ToList()
+                )).ToList();
         }
         catch
         {
@@ -112,7 +115,210 @@ public class GitHubService : IGitHubService
         GitGavelConfig config,
         CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_token) || !config.Github.ProjectsV2.Enabled)
+        var targetColumnName = decision.TargetColumn switch
+        {
+            "Backlog" => config.Github.ProjectsV2.Columns.Backlog,
+            "Done" => config.Github.ProjectsV2.Columns.Done,
+            "Discard" => config.Github.ProjectsV2.Columns.Discard,
+            _ => config.Github.ProjectsV2.Columns.HumanReview
+        };
+
+        await SyncNodeToProjectV2Async(owner, issueResult.NodeId, targetColumnName, decision.PriorityLabel, config, ct);
+    }
+
+    public async Task<ClosedIssueResult> CloseResolvedIssueAsync(
+        string owner,
+        string repo,
+        IssueResolutionDecision decision,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_token))
+        {
+            throw new InvalidOperationException("GH_TOKEN is required to close issues on GitHub.");
+        }
+
+        var c = decision.Candidate;
+        var commentBody = IssueFormatter.FormatIssueResolutionComment(decision);
+
+        await _client.Issue.Comment.Create(owner, repo, c.IssueNumber, commentBody);
+
+        var stateReason = string.Equals(config.Github.IssueClosure.StateReason, "not_planned", StringComparison.OrdinalIgnoreCase)
+            ? ItemStateReason.NotPlanned
+            : ItemStateReason.Completed;
+
+        var issueUpdate = new IssueUpdate
+        {
+            State = ItemState.Closed,
+            StateReason = stateReason
+        };
+
+        var updatedIssue = await _client.Issue.Update(owner, repo, c.IssueNumber, issueUpdate);
+
+        await SyncNodeToProjectV2Async(
+            owner,
+            updatedIssue.NodeId,
+            config.Github.ProjectsV2.Columns.Done,
+            priorityLabel: null,
+            config,
+            ct);
+
+        return new ClosedIssueResult(
+            IssueNumber: updatedIssue.Number,
+            Title: updatedIssue.Title,
+            HtmlUrl: updatedIssue.HtmlUrl,
+            NodeId: updatedIssue.NodeId,
+            HowItWasFixed: c.HowItWasFixed,
+            ResolvingCommits: c.ResolvingCommitSummaries.Count > 0 ? c.ResolvingCommitSummaries : c.ResolvingCommitShas,
+            ResolutionConfidence: decision.ResolutionProbability,
+            ClosedAtUtc: DateTime.UtcNow
+        );
+    }
+
+    public async Task<PullRequestContext?> GetPullRequestContextAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_token) || prNumber <= 0)
+        {
+            return null;
+        }
+
+        try
+        {
+            var pr = await _client.PullRequest.Get(owner, repo, prNumber);
+            var files = await _client.PullRequest.Files(owner, repo, prNumber);
+            var reviews = await _client.PullRequest.Review.GetAll(owner, repo, prNumber);
+            var reviewComments = await _client.PullRequest.ReviewComment.GetAll(owner, repo, prNumber);
+
+            return new PullRequestContext
+            {
+                PrNumber = pr.Number,
+                Title = pr.Title,
+                Body = pr.Body ?? "",
+                BaseRef = pr.Base?.Ref ?? "main",
+                HeadRef = pr.Head?.Ref ?? "feature",
+                HeadSha = pr.Head?.Sha ?? "",
+                ChangedFiles = files.Select(f => new PullRequestChangedFile(
+                    FilePath: f.FileName,
+                    Status: f.Status ?? "modified",
+                    Additions: f.Additions,
+                    Deletions: f.Deletions,
+                    Patch: f.Patch ?? ""
+                )).ToList(),
+                ExistingReviews = reviews.Select(r => new ExistingPrReviewSummary(
+                    Id: r.Id,
+                    State: r.State.StringValue,
+                    Body: r.Body ?? "",
+                    Author: r.User?.Login ?? "unknown",
+                    SubmittedAtUtc: r.SubmittedAt.UtcDateTime
+                )).ToList(),
+                ExistingReviewComments = reviewComments.Select(rc => new ExistingPrReviewComment(
+                    Id: rc.Id,
+                    FilePath: rc.Path ?? "",
+                    Line: rc.Position,
+                    Body: rc.Body ?? "",
+                    Author: rc.User?.Login ?? "unknown",
+                    CreatedAtUtc: rc.CreatedAt.UtcDateTime
+                )).ToList()
+            };
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    public async Task<PostedPrReviewResult> PostPullRequestReviewAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        PrReviewAuditResult auditResult,
+        IReadOnlyList<PrCommentTriageDecision> decisions,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_token))
+        {
+            throw new InvalidOperationException("GH_TOKEN is required to post Pull Request reviews on GitHub.");
+        }
+
+        var inlineDecisions = config.Subagents.PrReview.PostInlineComments
+            ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList()
+            : [];
+
+        var summaryBody = config.Subagents.PrReview.PostSummaryComment
+            ? IssueFormatter.FormatPrReviewSummary(auditResult, decisions)
+            : "GitGavel automated Pull Request audit.";
+
+        var eventStr = !string.IsNullOrWhiteSpace(auditResult.RecommendedEvent)
+            ? auditResult.RecommendedEvent
+            : config.Github.PullRequests.DefaultReviewEvent;
+
+        var reviewEvent = eventStr.ToUpperInvariant() switch
+        {
+            "APPROVE" => PullRequestReviewEvent.Approve,
+            "REQUEST_CHANGES" => PullRequestReviewEvent.RequestChanges,
+            _ => PullRequestReviewEvent.Comment
+        };
+
+        var draftComments = inlineDecisions
+            .Select(d => new DraftPullRequestReviewComment(
+                IssueFormatter.FormatInlinePrComment(d),
+                d.Candidate.FilePath,
+                Math.Max(1, d.Candidate.Line)))
+            .ToList();
+
+        try
+        {
+            var reviewCreate = new PullRequestReviewCreate
+            {
+                Body = summaryBody,
+                Event = reviewEvent,
+                CommitId = string.IsNullOrWhiteSpace(auditResult.HeadSha) ? null : auditResult.HeadSha
+            };
+
+            foreach (var dc in draftComments)
+            {
+                reviewCreate.Comments.Add(dc);
+            }
+
+            var createdReview = await _client.PullRequest.Review.Create(owner, repo, prNumber, reviewCreate);
+            return new PostedPrReviewResult(
+                PrNumber: prNumber,
+                ReviewId: createdReview.Id,
+                HtmlUrl: createdReview.HtmlUrl,
+                InlineCommentsPosted: draftComments.Count,
+                SummaryPosted: true,
+                Verdict: eventStr.ToUpperInvariant()
+            );
+        }
+        catch
+        {
+            // Fallback: if diff position validation rejects an inline comment or self-approval, post summary comment on the PR
+            var comment = await _client.Issue.Comment.Create(owner, repo, prNumber, summaryBody);
+            return new PostedPrReviewResult(
+                PrNumber: prNumber,
+                ReviewId: comment.Id,
+                HtmlUrl: comment.HtmlUrl,
+                InlineCommentsPosted: 0,
+                SummaryPosted: true,
+                Verdict: "COMMENT"
+            );
+        }
+    }
+
+    private async Task SyncNodeToProjectV2Async(
+        string owner,
+        string contentNodeId,
+        string targetColumnName,
+        string? priorityLabel,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_token) || !config.Github.ProjectsV2.Enabled || string.IsNullOrWhiteSpace(contentNodeId))
         {
             return;
         }
@@ -182,7 +388,7 @@ public class GitHubService : IGitHubService
             var projectId = projectElem.GetProperty("id").GetString();
             if (string.IsNullOrWhiteSpace(projectId)) return;
 
-            // 2. Add Issue to Project
+            // 2. Add Issue to Project (idempotent in Projects v2 GraphQL API)
             var addItemMutation = """
             mutation ($projectId: ID!, $contentId: ID!) {
               addProjectV2ItemById(input: { projectId: $projectId, contentId: $contentId }) {
@@ -191,7 +397,7 @@ public class GitHubService : IGitHubService
             }
             """;
 
-            var addItemResp = await ExecuteGraphQLAsync(addItemMutation, new { projectId, contentId = issueResult.NodeId }, ct);
+            var addItemResp = await ExecuteGraphQLAsync(addItemMutation, new { projectId, contentId = contentNodeId }, ct);
             using var addItemDoc = JsonDocument.Parse(addItemResp);
 
             string? itemId = null;
@@ -205,14 +411,7 @@ public class GitHubService : IGitHubService
 
             if (string.IsNullOrWhiteSpace(itemId)) return;
 
-            // 3. Update Status Column (Backlog vs AI Triage vs Discarded)
-            var targetColumnName = decision.TargetColumn switch
-            {
-                "Backlog" => config.Github.ProjectsV2.Columns.Backlog,
-                "Discard" => config.Github.ProjectsV2.Columns.Discard,
-                _ => config.Github.ProjectsV2.Columns.HumanReview
-            };
-
+            // 3. Update Status Column (Backlog vs AI Triage vs Done vs Discarded)
             if (projectElem.TryGetProperty("fields", out var fieldsElem) && fieldsElem.TryGetProperty("nodes", out var nodes))
             {
                 foreach (var fNode in nodes.EnumerateArray())
@@ -235,7 +434,9 @@ public class GitHubService : IGitHubService
                             }
                         }
                     }
-                    else if (string.Equals(fieldName, config.Github.ProjectsV2.Fields.Priority, StringComparison.OrdinalIgnoreCase) && fNode.TryGetProperty("id", out var prioFId))
+                    else if (!string.IsNullOrWhiteSpace(priorityLabel) &&
+                             string.Equals(fieldName, config.Github.ProjectsV2.Fields.Priority, StringComparison.OrdinalIgnoreCase) &&
+                             fNode.TryGetProperty("id", out var prioFId))
                     {
                         var prioFieldId = prioFId.GetString();
                         if (fNode.TryGetProperty("options", out var options))
@@ -243,7 +444,7 @@ public class GitHubService : IGitHubService
                             foreach (var opt in options.EnumerateArray())
                             {
                                 var optName = opt.TryGetProperty("name", out var on) ? on.GetString() : null;
-                                if (string.Equals(optName, decision.PriorityLabel, StringComparison.OrdinalIgnoreCase) && opt.TryGetProperty("id", out var optId))
+                                if (string.Equals(optName, priorityLabel, StringComparison.OrdinalIgnoreCase) && opt.TryGetProperty("id", out var optId))
                                 {
                                     var optionId = optId.GetString();
                                     await SetProjectFieldAsync(projectId, itemId, prioFieldId!, optionId!, ct);

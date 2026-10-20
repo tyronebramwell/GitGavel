@@ -1,4 +1,5 @@
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
@@ -13,10 +14,19 @@ public record GitGavelIssueMetadata(
     string Agent,
     DateTime CreatedAtUtc);
 
+public record GitGavelResolutionMetadata(
+    List<string> ResolvedByCommits,
+    double JevResolutionConfidence,
+    string Agent,
+    DateTime ClosedAtUtc);
+
 public static partial class IssueFormatter
 {
     [GeneratedRegex(@"<!--\s*gitgavel-metadata\s*([\s\S]*?)-->", RegexOptions.Compiled)]
     private static partial Regex MetadataCommentRegex();
+
+    [GeneratedRegex(@"<!--\s*gitgavel-resolution\s*([\s\S]*?)-->", RegexOptions.Compiled)]
+    private static partial Regex ResolutionCommentRegex();
 
     public static string FormatIssueBody(TriageDecision decision)
     {
@@ -139,5 +149,183 @@ public static partial class IssueFormatter
             confidence,
             agent ?? "Unknown",
             createdAt);
+    }
+
+    public static string FormatIssueResolutionComment(IssueResolutionDecision decision)
+    {
+        var c = decision.Candidate;
+        var sb = new StringBuilder();
+
+        sb.AppendLine("## ✅ Issue Resolved");
+        sb.AppendLine();
+        sb.AppendLine("GitGavel verified that this issue has been completed in the codebase and is automatically closing it.");
+        sb.AppendLine();
+        sb.AppendLine("### 🛠️ How It Was Fixed");
+        sb.AppendLine(c.HowItWasFixed);
+        sb.AppendLine();
+
+        sb.AppendLine("### 🔗 Resolving Commits");
+        if (c.ResolvingCommitSummaries.Count > 0)
+        {
+            foreach (var summary in c.ResolvingCommitSummaries)
+            {
+                sb.AppendLine($"- {summary}");
+            }
+        }
+        else if (c.ResolvingCommitShas.Count > 0)
+        {
+            foreach (var sha in c.ResolvingCommitShas)
+            {
+                var shortSha = sha.Length > 7 ? sha[..7] : sha;
+                sb.AppendLine($"- `{shortSha}`");
+            }
+        }
+        else
+        {
+            sb.AppendLine("- _Verified against current repository state_");
+        }
+        sb.AppendLine();
+
+        var commitsJson = JsonSerializer.Serialize(c.ResolvingCommitShas);
+        sb.AppendLine("---");
+        sb.AppendLine("<!-- gitgavel-resolution");
+        sb.AppendLine($"resolved_by_commits: {commitsJson}");
+        sb.AppendLine($"jev_resolution_confidence: {decision.ResolutionProbability:F2}");
+        sb.AppendLine($"agent: {c.AgentName}");
+        sb.AppendLine($"closed_at: {DateTime.UtcNow:O}");
+        sb.AppendLine("-->");
+
+        return sb.ToString();
+    }
+
+    public static GitGavelResolutionMetadata? ParseResolutionMetadata(string commentBody)
+    {
+        if (string.IsNullOrWhiteSpace(commentBody)) return null;
+
+        var match = ResolutionCommentRegex().Match(commentBody);
+        if (!match.Success) return null;
+
+        var yaml = match.Groups[1].Value;
+        var lines = yaml.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+
+        var commits = new List<string>();
+        var confidence = 0.90;
+        string? agent = null;
+        var closedAt = DateTime.UtcNow;
+
+        foreach (var line in lines)
+        {
+            var parts = line.Split(':', 2, StringSplitOptions.TrimEntries);
+            if (parts.Length < 2) continue;
+
+            var key = parts[0].ToLowerInvariant();
+            var val = parts[1];
+
+            switch (key)
+            {
+                case "resolved_by_commits":
+                    try
+                    {
+                        var parsed = JsonSerializer.Deserialize<List<string>>(val);
+                        if (parsed != null) commits = parsed;
+                    }
+                    catch
+                    {
+                        // Ignore malformed list
+                    }
+                    break;
+                case "jev_resolution_confidence":
+                    if (double.TryParse(val, out var conf)) confidence = conf;
+                    break;
+                case "agent":
+                    agent = val;
+                    break;
+                case "closed_at":
+                    if (DateTime.TryParse(val, out var dt)) closedAt = dt;
+                    break;
+            }
+        }
+
+        return new GitGavelResolutionMetadata(
+            commits,
+            confidence,
+            agent ?? "IssueResolutionAuditor",
+            closedAt);
+    }
+
+    public static string FormatInlinePrComment(PrCommentTriageDecision decision)
+    {
+        var c = decision.Candidate;
+        var sb = new StringBuilder();
+        sb.AppendLine($"**[{decision.PriorityLabel} | {c.Category}] {c.Title}**");
+        sb.AppendLine();
+        sb.AppendLine(c.Body);
+
+        if (!string.IsNullOrWhiteSpace(c.SuggestedCode))
+        {
+            sb.AppendLine();
+            sb.AppendLine("```suggestion");
+            sb.AppendLine(c.SuggestedCode);
+            sb.AppendLine("```");
+        }
+
+        return sb.ToString().TrimEnd();
+    }
+
+    public static string FormatPrReviewSummary(
+        PrReviewAuditResult auditResult,
+        IReadOnlyList<PrCommentTriageDecision> decisions)
+    {
+        var sb = new StringBuilder();
+        var activeDecisions = decisions.Where(d => d.Action != PrCommentAction.Discard).ToList();
+        var inlinePosted = decisions.Count(d => d.Action == PrCommentAction.PostInlineReview);
+
+        int CountDomain(string cat, bool inlineOnly) =>
+            (inlineOnly ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview) : activeDecisions)
+            .Count(d => d.Candidate.Category.Equals(cat, StringComparison.OrdinalIgnoreCase));
+
+        sb.AppendLine("## ⚖️ GitGavel Pull Request Audit Summary");
+        sb.AppendLine();
+        sb.AppendLine("| Domain | Findings | Inline Comments | Prior Threads Resolved |");
+        sb.AppendLine("| :--- | :---: | :---: | :---: |");
+        sb.AppendLine($"| 🛡️ Security | {CountDomain("Security", false)} | {CountDomain("Security", true)} | {(auditResult.ResolvedThreadsNotes.Count > 0 ? $"{auditResult.ResolvedThreadsNotes.Count} noted" : "—")} |");
+        sb.AppendLine($"| 📋 Spec Alignment | {CountDomain("SpecDrift", false)} | {CountDomain("SpecDrift", true)} | — |");
+        sb.AppendLine($"| ⚙️ Architecture | {CountDomain("Refactoring", false)} | {CountDomain("Refactoring", true)} | — |");
+        sb.AppendLine($"| 🧪 Test Coverage | {CountDomain("Testing", false)} | {CountDomain("Testing", true)} | — |");
+        sb.AppendLine();
+
+        sb.AppendLine("### 🔍 Key Observations & Existing Review Audit");
+        if (!string.IsNullOrWhiteSpace(auditResult.SummaryObservations))
+        {
+            sb.AppendLine($"- **Overview**: {auditResult.SummaryObservations}");
+        }
+
+        foreach (var note in auditResult.ResolvedThreadsNotes)
+        {
+            sb.AppendLine($"- **Resolved Review Thread**: {note}");
+        }
+
+        var summaryOnlyItems = decisions.Where(d => d.Action == PrCommentAction.SummaryCommentOnly).ToList();
+        foreach (var item in summaryOnlyItems)
+        {
+            sb.AppendLine($"- **[{item.PriorityLabel} | {item.Candidate.Category}] `{item.Candidate.FilePath}:{item.Candidate.Line}` — {item.Candidate.Title}**: {item.Candidate.Body}");
+        }
+
+        if (inlinePosted > 0)
+        {
+            sb.AppendLine($"- **Inline Diff Comments**: Posted {inlinePosted} inline comment(s) directly on the Pull Request diff.");
+        }
+        sb.AppendLine();
+
+        sb.AppendLine("---");
+        sb.AppendLine("<!-- gitgavel-pr-review");
+        sb.AppendLine($"pr_number: {auditResult.PrNumber}");
+        sb.AppendLine($"head_sha: {auditResult.HeadSha}");
+        sb.AppendLine($"inline_comments_posted: {inlinePosted}");
+        sb.AppendLine("agent: PrReviewAuditor");
+        sb.AppendLine($"reviewed_at: {DateTime.UtcNow:O}");
+        sb.AppendLine("-->");
+
+        return sb.ToString();
     }
 }

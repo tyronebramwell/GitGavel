@@ -1,4 +1,5 @@
 using GitGavel.Configuration;
+using GitGavel.Git;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
 
@@ -6,6 +7,13 @@ namespace GitGavel.Discovery;
 
 public class FileScanner
 {
+    private readonly IGitService _gitService;
+
+    public FileScanner(IGitService? gitService = null)
+    {
+        _gitService = gitService ?? new GitService();
+    }
+
     public async Task<RepoContext> ScanAsync(string rootDirectory, GitGavelConfig config, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
@@ -79,7 +87,40 @@ public class FileScanner
                 IsSpec: false));
         }
 
-        // 3. Scan SARIF Reports if configured
+        // 3. Scan Test Files
+        var testMatcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+        foreach (var inc in config.Scope.Tests.Include)
+        {
+            testMatcher.AddInclude(inc);
+        }
+        foreach (var exc in config.Scope.Tests.Exclude)
+        {
+            testMatcher.AddExclude(exc);
+        }
+
+        var testMatches = testMatcher.Execute(dirWrapper);
+        var testFiles = new List<ScannedFile>();
+
+        foreach (var file in testMatches.Files)
+        {
+            var absPath = Path.Combine(rootDirectory, file.Path);
+            if (!File.Exists(absPath)) continue;
+
+            var content = await File.ReadAllTextAsync(absPath, ct);
+            var lineCount = CountLines(content);
+            var fileInfo = new FileInfo(absPath);
+
+            testFiles.Add(new ScannedFile(
+                RelativePath: file.Path,
+                AbsolutePath: absPath,
+                LineCount: lineCount,
+                SizeBytes: fileInfo.Length,
+                Content: content,
+                IsSpec: false,
+                IsTest: true));
+        }
+
+        // 4. Scan SARIF Reports if configured
         var sarifFindings = new List<SarifFinding>();
         if (config.Subagents.Security.Enabled)
         {
@@ -97,16 +138,24 @@ public class FileScanner
             }
         }
 
-        // 4. Precompute AST complexity analysis for source files
+        // 5. Precompute AST complexity analysis for source files
         var astSummaries = AstAnalyzer.AnalyzeAll(sourceFiles);
+
+        // 6. Retrieve recent git commit history for issue resolution tracking
+        var lookback = config.Subagents.IssueResolution.CommitLookbackCount > 0
+            ? config.Subagents.IssueResolution.CommitLookbackCount
+            : 50;
+        var recentCommits = _gitService.GetRecentCommits(rootDirectory, lookback);
 
         return new RepoContext
         {
             RootDirectory = rootDirectory,
             SpecFiles = specFiles,
             SourceFiles = sourceFiles,
+            TestFiles = testFiles,
             SarifFindings = sarifFindings,
-            AstSummaries = astSummaries
+            AstSummaries = astSummaries,
+            RecentCommits = recentCommits
         };
     }
 

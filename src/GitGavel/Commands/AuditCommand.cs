@@ -5,6 +5,7 @@ using GitGavel.Discovery;
 using GitGavel.Git;
 using GitGavel.System2;
 using GitGavel.System2.Abstractions;
+using GitGavel.System2.Models;
 using GitGavel.System2.Providers;
 using GitGavel.System1.Abstractions;
 using GitGavel.System1.Engines;
@@ -52,6 +53,10 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         [CommandOption("-r|--repo <OWNER/REPO>")]
         [Description("GitHub repository coordinates (e.g. 'owner/repo'). Overrides git remote origin and config.")]
         public string? Repository { get; set; }
+
+        [CommandOption("--pr <NUMBER>")]
+        [Description("Optional Pull Request number to audit for PR reviews and inline comments.")]
+        public int? PullRequestNumber { get; set; }
     }
 
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
@@ -78,6 +83,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         if (string.IsNullOrWhiteSpace(settings.Repository) && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_REPOSITORY")))
             settings.Repository = Environment.GetEnvironmentVariable("INPUT_REPOSITORY");
 
+        var activePrNumber = _gitService.ResolvePullRequestNumber(settings.PullRequestNumber);
+
         var repoDir = Path.GetFullPath(settings.RepoDirectory);
         DotEnvLoader.Load(repoDir);
         var (commitSha, branch) = _gitService.GetGitMetadata(repoDir);
@@ -98,12 +105,12 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         }
 
         // 1. File & Context Scanning
-        var scanner = new FileScanner();
+        var scanner = new FileScanner(_gitService);
         RepoContext repoContext;
 
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
-            .StartAsync("Scanning repository files and specs...", async ctx =>
+            .StartAsync("Scanning repository files, specs, tests, and commit history...", async ctx =>
             {
                 repoContext = await scanner.ScanAsync(repoDir, config);
             });
@@ -118,6 +125,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         scopeTable.AddRow("Specification Files", repoContext.SpecFiles.Count.ToString(), string.Join(", ", repoContext.SpecFiles.Select(f => f.RelativePath)));
         scopeTable.AddRow("Source Files", repoContext.SourceFiles.Count.ToString(), $"{repoContext.TotalLinesOfCode:N0} total LOC");
+        scopeTable.AddRow("Automated Test Files", repoContext.TestFiles.Count.ToString(), $"{repoContext.TotalTestLinesOfCode:N0} test LOC");
+        scopeTable.AddRow("Recent Git Commits", repoContext.RecentCommits.Count.ToString(), $"Lookback window: {config.Subagents.IssueResolution.CommitLookbackCount}");
         scopeTable.AddRow("SARIF Findings", repoContext.SarifFindings.Count.ToString(), $"{repoContext.SarifFindings.Count} static security alerts loaded");
 
         AnsiConsole.Write(scopeTable);
@@ -135,7 +144,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.BouncingBar)
-            .StartAsync("Executing System 2 Generative Subagents (SpecDrift, Security, Refactoring)...", async ctx =>
+            .StartAsync("Executing System 2 Generative Subagents (SpecDrift, Security, Refactoring, TestSentinel)...", async ctx =>
             {
                 orchestrationResult = await orchestrator.RunAllAsync(repoContext, config);
             });
@@ -188,14 +197,25 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         var explicitRepo = settings.Repository ?? config.Github.Repository;
         var (owner, repo) = _gitService.ResolveRepoCoordinates(repoDir, explicitRepo);
+        var mockGh = new MockGitHubService();
+        if (settings.UseMock)
+        {
+            mockGh.ExistingIssues.Add(new ExistingIssue(
+                Number: 101,
+                Title: "Isolate CI environment variables in GitService fallback test",
+                Body: "GitServiceTests fallback test should clear GITHUB_SHA and GITHUB_REF_NAME.",
+                State: "open",
+                Labels: ["ai-backlog", "testing"]));
+        }
+
         IGitHubService gitHubService = settings.UseMock || settings.DryRun
-            ? new MockGitHubService()
+            ? mockGh
             : new GitHubService();
 
         List<ExistingIssue> existingIssues = [];
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
-            .StartAsync($"Fetching existing issues from {owner}/{repo} for deduplication...", async ctx =>
+            .StartAsync($"Fetching existing issues from {owner}/{repo} for deduplication & resolution tracking...", async ctx =>
             {
                 existingIssues = await gitHubService.GetExistingIssuesAsync(owner, repo, cancellationToken);
             });
@@ -315,6 +335,110 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             }
         }
 
+        // 4b. Phase 7: Automated Completed Issue Resolution & Closure
+        List<IssueResolutionDecision> resolutionDecisions = [];
+        List<ClosedIssueResult> closedIssues = [];
+        var openIssues = existingIssues.Where(i => string.Equals(i.State, "open", StringComparison.OrdinalIgnoreCase)).ToList();
+
+        if (config.Subagents.IssueResolution.Enabled && config.Github.IssueClosure.Enabled && openIssues.Count > 0)
+        {
+            IssueResolutionAgentResult resolutionResult = null!;
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync($"Evaluating {openIssues.Count} open issue(s) against recent commits for automated closure...", async ctx =>
+                {
+                    resolutionResult = await orchestrator.EvaluateIssueResolutionsAsync(openIssues, repoContext, config, cancellationToken);
+                    resolutionDecisions = await triageEngine.VerifyIssueResolutionsAsync(resolutionResult.Candidates, openIssues, config, cancellationToken);
+                });
+
+            orchestrationResult = orchestrationResult with { IssueResolution = resolutionResult };
+
+            var verifiedClosures = resolutionDecisions.Where(d => d.Action == IssueResolutionAction.CloseResolved).ToList();
+            if (verifiedClosures.Count > 0)
+            {
+                AnsiConsole.MarkupLine($"[bold green]✅ Issue Resolution Verification:[/] [cyan]{verifiedClosures.Count}[/] open issue(s) confirmed fixed by recent commits.");
+                foreach (var vc in verifiedClosures)
+                {
+                    var shas = string.Join(", ", vc.Candidate.ResolvingCommitShas.Select(s => s.Length > 7 ? s[..7] : s));
+                    AnsiConsole.MarkupLine($"  [green]•[/] Issue [bold]#{vc.Candidate.IssueNumber}[/] ({Markup.Escape(vc.Candidate.IssueTitle)}) — Fixed in [cyan]{Markup.Escape(shas)}[/] (Jev Noul: {vc.ResolutionProbability:P0})");
+
+                    if (!settings.DryRun && (settings.UseMock || owner != "local-owner") && config.Subagents.IssueResolution.AutoCloseCompleted)
+                    {
+                        try
+                        {
+                            var closed = await gitHubService.CloseResolvedIssueAsync(owner, repo, vc, config, cancellationToken);
+                            closedIssues.Add(closed);
+                        }
+                        catch (Exception ex)
+                        {
+                            AnsiConsole.MarkupLine($"  [red]✗ Failed to close issue #{vc.Candidate.IssueNumber}:[/] {Markup.Escape(ex.Message)}");
+                        }
+                    }
+                }
+                AnsiConsole.WriteLine();
+            }
+        }
+
+        // 4c. Phase 6: Pull Request Review Auditing & Automated Commenting
+        List<PrCommentTriageDecision> prCommentDecisions = [];
+        PostedPrReviewResult? postedPrReview = null;
+
+        if (activePrNumber.HasValue && config.Subagents.PrReview.Enabled && config.Github.PullRequests.Enabled)
+        {
+            PullRequestContext? prContext = null;
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync($"Fetching Pull Request #{activePrNumber.Value} diff and existing review threads...", async ctx =>
+                {
+                    prContext = await gitHubService.GetPullRequestContextAsync(owner, repo, activePrNumber.Value, cancellationToken);
+                });
+
+            if (prContext != null)
+            {
+                PrReviewAuditResult prAudit = null!;
+                await AnsiConsole.Status()
+                    .Spinner(Spinner.Known.BouncingBar)
+                    .StartAsync($"Auditing Pull Request #{activePrNumber.Value} reviews and diffs...", async ctx =>
+                    {
+                        prAudit = await orchestrator.AuditPullRequestAsync(prContext, repoContext, config, cancellationToken);
+                        prCommentDecisions = await triageEngine.TriagePrReviewCommentsAsync(
+                            prAudit.InlineComments,
+                            prContext.ExistingReviewComments,
+                            config,
+                            cancellationToken);
+                    });
+
+                orchestrationResult = orchestrationResult with { PrReviewAudit = prAudit };
+
+                var inlineCount = prCommentDecisions.Count(d => d.Action == PrCommentAction.PostInlineReview);
+                AnsiConsole.MarkupLine($"[bold cyan]🔍 Pull Request #{activePrNumber.Value} Audit Complete:[/] [green]{inlineCount} inline comment(s)[/] | [yellow]{prAudit.ResolvedThreadsNotes.Count} resolved thread(s) noted[/]");
+
+                if (!settings.DryRun && (settings.UseMock || owner != "local-owner"))
+                {
+                    try
+                    {
+                        postedPrReview = await gitHubService.PostPullRequestReviewAsync(
+                            owner,
+                            repo,
+                            activePrNumber.Value,
+                            prAudit,
+                            prCommentDecisions,
+                            config,
+                            cancellationToken);
+                        AnsiConsole.MarkupLine($"  [green]✓[/] Posted PR review ([bold]{postedPrReview.Verdict}[/]) to Pull Request #{activePrNumber.Value}.\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.MarkupLine($"  [red]✗ Failed to post PR review on #{activePrNumber.Value}:[/] {Markup.Escape(ex.Message)}\n");
+                    }
+                }
+                else
+                {
+                    AnsiConsole.WriteLine();
+                }
+            }
+        }
+
         // 5. Developer Reporting Engine
         var reportCtx = new ReportContext
         {
@@ -322,6 +446,11 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             RepoContext = repoContext,
             Orchestration = orchestrationResult,
             TriageDecisions = triageDecisions,
+            IssueResolutionDecisions = resolutionDecisions,
+            ClosedIssues = closedIssues,
+            PrCommentDecisions = prCommentDecisions,
+            PostedPrReview = postedPrReview,
+            ActivePullRequestNumber = activePrNumber,
             StartTimeUtc = startTime,
             EndTimeUtc = DateTime.UtcNow,
             GitCommitSha = commitSha,

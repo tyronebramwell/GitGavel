@@ -27,6 +27,10 @@ public class AuditRunReporter : BaseMarkdownReporter
         sb.AppendLine($"| **Total Duration** | `{ctx.Duration.TotalSeconds:F2} seconds` |");
         sb.AppendLine($"| **Git Commit SHA** | `{ctx.GitCommitSha}` |");
         sb.AppendLine($"| **Git Branch** | `{ctx.GitBranch}` |");
+        if (ctx.ActivePullRequestNumber.HasValue)
+        {
+            sb.AppendLine($"| **Active Pull Request** | `#{ctx.ActivePullRequestNumber}` |");
+        }
         sb.AppendLine();
 
         // 2. Scope Scanned
@@ -36,7 +40,9 @@ public class AuditRunReporter : BaseMarkdownReporter
         sb.AppendLine("| :--- | :--- |");
         sb.AppendLine($"| **Specification Files** | {ctx.RepoContext.SpecFiles.Count} files |");
         sb.AppendLine($"| **Source Code Files** | {ctx.RepoContext.SourceFiles.Count} files |");
+        sb.AppendLine($"| **Automated Test Files** | {ctx.RepoContext.TestFiles.Count} files ({ctx.RepoContext.TotalTestLinesOfCode:N0} LOC) |");
         sb.AppendLine($"| **Total Lines of Code** | {ctx.RepoContext.TotalLinesOfCode:N0} LOC |");
+        sb.AppendLine($"| **Git Commits Inspected** | {ctx.RepoContext.RecentCommits.Count} commits |");
         sb.AppendLine($"| **SARIF Reports Ingested** | {ctx.RepoContext.SarifFindings.Count} findings |");
         sb.AppendLine();
 
@@ -52,6 +58,20 @@ public class AuditRunReporter : BaseMarkdownReporter
             sb.AppendLine($"| **{agent.AgentName}** | {status} | {agent.PromptTokens:N0} | {agent.CompletionTokens:N0} | {agent.TotalTokens:N0} | {agent.DurationMs}ms |");
         }
 
+        if (ctx.Orchestration.PrReviewAudit != null)
+        {
+            var pr = ctx.Orchestration.PrReviewAudit;
+            var status = pr.IsSuccess ? $"{pr.InlineComments.Count} PR comments" : "❌ Error: " + pr.ErrorMessage;
+            sb.AppendLine($"| **PrReviewAuditor** | {status} | {pr.PromptTokens:N0} | {pr.CompletionTokens:N0} | {pr.TotalTokens:N0} | {pr.DurationMs}ms |");
+        }
+
+        if (ctx.Orchestration.IssueResolution != null)
+        {
+            var ir = ctx.Orchestration.IssueResolution;
+            var status = ir.IsSuccess ? $"{ir.Candidates.Count} resolved candidates" : "❌ Error: " + ir.ErrorMessage;
+            sb.AppendLine($"| **IssueResolutionAuditor** | {status} | {ir.PromptTokens:N0} | {ir.CompletionTokens:N0} | {ir.TotalTokens:N0} | {ir.DurationMs}ms |");
+        }
+
         sb.AppendLine($"| **TOTAL** | **{ctx.Orchestration.AllFindings.Count} findings** | **{ctx.Orchestration.TotalPromptTokens:N0}** | **{ctx.Orchestration.TotalCompletionTokens:N0}** | **{ctx.Orchestration.TotalTokens:N0}** | **{ctx.Orchestration.TotalDurationMs}ms** |");
         sb.AppendLine();
 
@@ -60,6 +80,8 @@ public class AuditRunReporter : BaseMarkdownReporter
         var humanReview = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview);
         var duplicates = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.SuppressedDuplicate);
         var noise = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.DiscardedNoise);
+        var closedCount = ctx.IssueResolutionDecisions.Count(d => d.Action == IssueResolutionAction.CloseResolved);
+        var prInlineCount = ctx.PrCommentDecisions.Count(d => d.Action == PrCommentAction.PostInlineReview);
 
         sb.AppendLine("## 4. System 1 Jev Triage Funnel Statistics");
         sb.AppendLine();
@@ -68,6 +90,8 @@ public class AuditRunReporter : BaseMarkdownReporter
         sb.AppendLine($"| **Evaluated Candidates** | {ctx.TriageDecisions.Count} | Total findings analyzed through Jev |");
         sb.AppendLine($"| **Accepted to Backlog** | **{accepted}** | High-confidence novel findings queued for GitHub Projects Backlog |");
         sb.AppendLine($"| **Routed to AI Triage Review** | **{humanReview}** | Borderline findings or potential duplicate matches |");
+        sb.AppendLine($"| **Completed Issues Verified & Closed** | **{closedCount}** | Open issues verified fixed via Jev `Noul` and closed with commit links |");
+        sb.AppendLine($"| **PR Inline Review Comments** | **{prInlineCount}** | High-signal PR diff comments gated through Jev |");
         sb.AppendLine($"| **Suppressed Duplicates** | **{duplicates}** | Pairwise duplicates rejected via Jev `Noul` |");
         sb.AppendLine($"| **Suppressed Noise / Hallucinations** | **{noise}** | Low-confidence or subjective items discarded via Jev `Choice` |");
         sb.AppendLine();

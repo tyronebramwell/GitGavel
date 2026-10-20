@@ -249,4 +249,274 @@ public class TypeSafeJevEngine : ITriageEngine
 
         return decisions;
     }
+
+    public async Task<List<PrCommentTriageDecision>> TriagePrReviewCommentsAsync(
+        IReadOnlyList<PrReviewCommentCandidate> candidates,
+        IReadOnlyList<ExistingPrReviewComment> existingComments,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        var thresholds = config.Triage.Jev.Thresholds;
+        var decisions = new List<PrCommentTriageDecision>();
+
+        foreach (var candidate in candidates)
+        {
+            long? dupId = null;
+            var maxProb = 0.0;
+
+            if (config.Triage.Jev.DedupeWithNoul && existingComments.Count > 0)
+            {
+                foreach (var existing in existingComments)
+                {
+                    var dedupeState = JsonContent.From(new
+                    {
+                        candidate = new
+                        {
+                            filePath = candidate.FilePath,
+                            line = candidate.Line,
+                            title = candidate.Title,
+                            body = candidate.Body
+                        },
+                        existingComment = new
+                        {
+                            id = existing.Id,
+                            filePath = existing.FilePath,
+                            line = existing.Line,
+                            body = existing.Body
+                        }
+                    });
+
+                    var dedupeQuestions = new Dictionary<string, Question>
+                    {
+                        ["is_duplicate_comment"] = Question.Noul(
+                            "Does candidate PR comment duplicate an existing review comment or thread on the Pull Request?",
+                            JsonContent.From(new NoulCriteria
+                            {
+                                True = "Both comments address the same defect or suggestion on the same file/area.",
+                                False = "The candidate comment raises a distinct, novel review point."
+                            })
+                        )
+                    };
+
+                    var dedupeResp = await _jevClient.SystemOneAsync(dedupeState, dedupeQuestions, cancellationToken: ct);
+                    var prob = dedupeResp.Noul("is_duplicate_comment")?.Noul ?? 0.0;
+                    if (prob > maxProb) maxProb = prob;
+
+                    if (prob >= thresholds.AutoBacklogConfidence)
+                    {
+                        dupId = existing.Id;
+                        break;
+                    }
+                }
+            }
+
+            if (dupId.HasValue)
+            {
+                decisions.Add(new PrCommentTriageDecision
+                {
+                    Candidate = candidate,
+                    IsDuplicate = true,
+                    DuplicateOfCommentId = dupId,
+                    DuplicateProbability = maxProb,
+                    JevScore = 1.0,
+                    PriorityLabel = "P3",
+                    Action = PrCommentAction.Discard,
+                    Confidence = maxProb,
+                    Reason = $"Suppressed duplicate of existing PR review comment #{dupId} (P={maxProb:P0})"
+                });
+                continue;
+            }
+
+            var evalState = JsonContent.From(new
+            {
+                comment = new
+                {
+                    filePath = candidate.FilePath,
+                    line = candidate.Line,
+                    category = candidate.Category,
+                    severity = candidate.Severity,
+                    title = candidate.Title,
+                    body = candidate.Body,
+                    suggestedCode = candidate.SuggestedCode
+                }
+            });
+
+            var evalQuestions = new Dictionary<string, Question>
+            {
+                ["priority_score"] = Question.Score(
+                    "Rate the severity and impact of this PR review finding on a scale of 1 to 5.",
+                    [
+                        "P3 - Minor nit or formatting suggestion",
+                        "P3 - Low priority improvement",
+                        "P2 - Medium priority maintainability or test suggestion",
+                        "P1 - High priority defect or spec divergence",
+                        "P0 - Critical bug or security vulnerability blocking merge"
+                    ]
+                ),
+                ["pr_route_choice"] = Question.Choice(
+                    "Select how this PR review finding should be posted.",
+                    new Dictionary<string, JsonContent>
+                    {
+                        ["PostInlineReview"] = JsonContent.From("High-signal, line-specific finding that warrants an inline diff review comment."),
+                        ["SummaryCommentOnly"] = JsonContent.From("Broader observation better suited for the top-level PR summary comment."),
+                        ["Discard"] = JsonContent.From("Low-value nit, subjective preference, or false positive.")
+                    }
+                )
+            };
+
+            var evalResp = await _jevClient.SystemOneAsync(evalState, evalQuestions, cancellationToken: ct);
+            var rawScore = evalResp.Score("priority_score")?.Score ?? 3.0;
+            var calibratedScore = Math.Clamp(Math.Round(rawScore, 1), 1.0, 5.0);
+            var choiceStr = evalResp.Choice("pr_route_choice")?.Choice ?? "PostInlineReview";
+            var confidence = evalResp.Choice("pr_route_choice")?.Confidence ?? 0.88;
+
+            var prio = calibratedScore switch
+            {
+                >= 4.5 => "P0",
+                >= 3.5 => "P1",
+                >= 2.5 => "P2",
+                _ => "P3"
+            };
+
+            var action = choiceStr switch
+            {
+                "PostInlineReview" => PrCommentAction.PostInlineReview,
+                "SummaryCommentOnly" => PrCommentAction.SummaryCommentOnly,
+                _ => PrCommentAction.Discard
+            };
+
+            decisions.Add(new PrCommentTriageDecision
+            {
+                Candidate = candidate,
+                IsDuplicate = false,
+                DuplicateProbability = maxProb,
+                JevScore = calibratedScore,
+                PriorityLabel = prio,
+                Action = action,
+                Confidence = confidence,
+                Reason = $"Jev Choice '{choiceStr}' ({confidence:P0}, Score: {calibratedScore:F1}/5.0)"
+            });
+        }
+
+        // Enforce MaxInlineCommentsPerPr cap
+        var maxInline = config.Subagents.PrReview.MaxInlineCommentsPerPr;
+        var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
+        if (maxInline > 0 && inlineAccepted.Count > maxInline)
+        {
+            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(maxInline).ToHashSet();
+            for (var i = 0; i < decisions.Count; i++)
+            {
+                var d = decisions[i];
+                if (d.Action == PrCommentAction.PostInlineReview && !topInline.Contains(d))
+                {
+                    decisions[i] = d with
+                    {
+                        Action = PrCommentAction.SummaryCommentOnly,
+                        Reason = $"Moved to PR summary: maxInlineCommentsPerPr cap ({maxInline}) reached."
+                    };
+                }
+            }
+        }
+
+        return decisions;
+    }
+
+    public async Task<List<IssueResolutionDecision>> VerifyIssueResolutionsAsync(
+        IReadOnlyList<IssueResolutionCandidate> candidates,
+        IReadOnlyList<ExistingIssue> openIssues,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        var closeThreshold = config.Triage.Jev.Thresholds.AutoCloseIssueConfidence;
+        var decisions = new List<IssueResolutionDecision>();
+
+        foreach (var candidate in candidates)
+        {
+            if (!candidate.IsResolved || candidate.ResolvingCommitShas.Count == 0)
+            {
+                decisions.Add(new IssueResolutionDecision
+                {
+                    Candidate = candidate,
+                    VerifiedResolved = false,
+                    ResolutionProbability = 0.0,
+                    Action = IssueResolutionAction.LeaveOpen,
+                    TargetColumn = config.Github.ProjectsV2.Columns.Backlog,
+                    Reason = "Candidate does not cite resolving commits or is marked unresolved."
+                });
+                continue;
+            }
+
+            var matchingIssue = openIssues.FirstOrDefault(i => i.Number == candidate.IssueNumber);
+
+            var verifyState = JsonContent.From(new
+            {
+                openIssue = new
+                {
+                    number = candidate.IssueNumber,
+                    title = matchingIssue?.Title ?? candidate.IssueTitle,
+                    body = matchingIssue?.Body is { Length: > 1000 } b ? b[..1000] : (matchingIssue?.Body ?? "")
+                },
+                resolutionProof = new
+                {
+                    howItWasFixed = candidate.HowItWasFixed,
+                    resolvingCommitShas = candidate.ResolvingCommitShas,
+                    resolvingCommitSummaries = candidate.ResolvingCommitSummaries
+                }
+            });
+
+            var verifyQuestions = new Dictionary<string, Question>
+            {
+                ["is_issue_resolved"] = Question.Noul(
+                    "Given the open issue and the code changes in the cited commits, has the root cause or requirement described in the issue been completely resolved?",
+                    JsonContent.From(new NoulCriteria
+                    {
+                        True = "The cited commits and fix explanation directly and completely resolve the issue requirements.",
+                        False = "The issue remains unaddressed, only partially fixed, or the commits are unrelated."
+                    })
+                )
+            };
+
+            var verifyResp = await _jevClient.SystemOneAsync(verifyState, verifyQuestions, cancellationToken: ct);
+            var prob = verifyResp.Noul("is_issue_resolved")?.Noul ?? 0.0;
+
+            if (prob >= closeThreshold)
+            {
+                decisions.Add(new IssueResolutionDecision
+                {
+                    Candidate = candidate,
+                    VerifiedResolved = true,
+                    ResolutionProbability = prob,
+                    Action = IssueResolutionAction.CloseResolved,
+                    TargetColumn = config.Github.ProjectsV2.Columns.Done,
+                    Reason = $"Verified resolved via Jev Noul (P={prob:P0} >= {closeThreshold:P0})"
+                });
+            }
+            else if (prob >= 0.60)
+            {
+                decisions.Add(new IssueResolutionDecision
+                {
+                    Candidate = candidate,
+                    VerifiedResolved = false,
+                    ResolutionProbability = prob,
+                    Action = IssueResolutionAction.CommentProgress,
+                    TargetColumn = config.Github.ProjectsV2.Columns.HumanReview,
+                    Reason = $"Partial fix confidence (P={prob:P0} < {closeThreshold:P0}); leaving issue open."
+                });
+            }
+            else
+            {
+                decisions.Add(new IssueResolutionDecision
+                {
+                    Candidate = candidate,
+                    VerifiedResolved = false,
+                    ResolutionProbability = prob,
+                    Action = IssueResolutionAction.LeaveOpen,
+                    TargetColumn = config.Github.ProjectsV2.Columns.Backlog,
+                    Reason = $"Insufficient resolution confidence (P={prob:P0})"
+                });
+            }
+        }
+
+        return decisions;
+    }
 }

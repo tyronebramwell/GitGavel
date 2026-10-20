@@ -16,7 +16,8 @@ public class ReportingEngine
         new AuditRunReporter(),
         new TicketsReporter(),
         new SecurityReporter(),
-        new CodeQualityReporter()
+        new CodeQualityReporter(),
+        new TestQualityReporter()
     ];
 
     public async Task<List<string>> GenerateReportsAsync(ReportContext ctx, CancellationToken ct = default)

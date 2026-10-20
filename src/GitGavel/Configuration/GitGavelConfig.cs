@@ -14,6 +14,7 @@ public class ScopeConfig
 {
     public SpecsScopeConfig Specs { get; set; } = new();
     public SourceScopeConfig Source { get; set; } = new();
+    public TestsScopeConfig Tests { get; set; } = new();
 }
 
 public class SpecsScopeConfig
@@ -24,7 +25,13 @@ public class SpecsScopeConfig
 public class SourceScopeConfig
 {
     public List<string> Include { get; set; } = ["**/*.cs", "**/*.ts", "**/*.py"];
-    public List<string> Exclude { get; set; } = ["**/bin/**", "**/obj/**", "**/*.Tests/**", "**/.git/**"];
+    public List<string> Exclude { get; set; } = ["**/bin/**", "**/obj/**", "**/*.Tests/**", "tests/**", "**/.git/**"];
+}
+
+public class TestsScopeConfig
+{
+    public List<string> Include { get; set; } = ["**/*.Tests/**/*.cs", "tests/**/*.cs", "**/*.spec.ts", "**/*.test.ts", "tests/**/*.py", "e2e/**"];
+    public List<string> Exclude { get; set; } = ["**/bin/**", "**/obj/**", "**/.git/**"];
 }
 
 public class SubagentsConfig
@@ -53,6 +60,28 @@ public class SubagentsConfig
         Provider = "gemini",
         Model = "gemini-2.5-flash"
     };
+
+    public TestsSubagentSettings Tests { get; set; } = new()
+    {
+        Enabled = true,
+        Provider = "gemini",
+        Model = "gemini-2.5-pro",
+        Tiers = ["unit", "integration", "e2e"]
+    };
+
+    public PrReviewSubagentSettings PrReview { get; set; } = new()
+    {
+        Enabled = true,
+        Provider = "gemini",
+        Model = "gemini-2.5-pro"
+    };
+
+    public IssueResolutionSubagentSettings IssueResolution { get; set; } = new()
+    {
+        Enabled = true,
+        Provider = "gemini",
+        Model = "gemini-2.5-flash"
+    };
 }
 
 public class SubagentSettings
@@ -65,6 +94,26 @@ public class SubagentSettings
 public class SecuritySubagentSettings : SubagentSettings
 {
     public List<string> SarifReports { get; set; } = [];
+}
+
+public class TestsSubagentSettings : SubagentSettings
+{
+    public List<string> Tiers { get; set; } = ["unit", "integration", "e2e"];
+}
+
+public class PrReviewSubagentSettings : SubagentSettings
+{
+    public bool AuditExistingReviews { get; set; } = true;
+    public bool PostInlineComments { get; set; } = true;
+    public bool PostSummaryComment { get; set; } = true;
+    public int MaxInlineCommentsPerPr { get; set; } = 10;
+}
+
+public class IssueResolutionSubagentSettings : SubagentSettings
+{
+    public bool AutoCloseCompleted { get; set; } = true;
+    public int CommitLookbackCount { get; set; } = 50;
+    public bool IncludeCommitLinks { get; set; } = true;
 }
 
 public class TriageConfig
@@ -86,6 +135,7 @@ public class JevThresholds
 {
     public double AutoBacklogConfidence { get; set; } = 0.85;
     public double HumanReviewConfidence { get; set; } = 0.50;
+    public double AutoCloseIssueConfidence { get; set; } = 0.90;
 }
 
 public class ReportingConfig
@@ -102,13 +152,28 @@ public class ReportsSelection
     public bool Tickets { get; set; } = true;
     public bool Security { get; set; } = true;
     public bool CodeQuality { get; set; } = true;
+    public bool TestQuality { get; set; } = true;
 }
 
 public class GitHubConfig
 {
     public string? Repository { get; set; }
     public List<string> Labels { get; set; } = ["ai-backlog"];
+    public PullRequestsConfig PullRequests { get; set; } = new();
+    public IssueClosureConfig IssueClosure { get; set; } = new();
     public ProjectsV2Config ProjectsV2 { get; set; } = new();
+}
+
+public class PullRequestsConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string DefaultReviewEvent { get; set; } = "COMMENT"; // "COMMENT" | "REQUEST_CHANGES" | "APPROVE"
+}
+
+public class IssueClosureConfig
+{
+    public bool Enabled { get; set; } = true;
+    public string StateReason { get; set; } = "completed";
 }
 
 public class ProjectsV2Config
@@ -123,6 +188,7 @@ public class ProjectColumnsConfig
 {
     public string Backlog { get; set; } = "Backlog";
     public string HumanReview { get; set; } = "AI Triage";
+    public string Done { get; set; } = "Done";
     public string Discard { get; set; } = "Discarded";
 }
 

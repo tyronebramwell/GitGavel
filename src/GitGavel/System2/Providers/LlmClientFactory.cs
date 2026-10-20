@@ -18,7 +18,7 @@ public class LlmClientFactory : ILlmClientFactory
     {
         if (_forceMock)
         {
-            return _fallbackClient ?? new MockLlmClient();
+            return new MockLlmClient();
         }
 
         var provider = settings.Provider?.ToLowerInvariant() ?? "gemini";

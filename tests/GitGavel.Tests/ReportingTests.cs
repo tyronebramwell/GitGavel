@@ -53,15 +53,31 @@ public class ReportingTests
             SuggestedRemediation = "Add page and pageSize parameters."
         };
 
+        var finding3 = new FindingCandidate
+        {
+            Title = "Missing Integration Test for Order Checkout",
+            Summary = "OrderCheckoutService lacks integration and E2E test coverage.",
+            Category = "Testing",
+            Severity = "High",
+            TestTier = "Integration",
+            TestDefectType = "MissingTest",
+            FilePath = "src/OrderCheckoutService.cs",
+            StartLine = 10,
+            EndLine = 45,
+            AgentName = "TestSentinelAgent",
+            SuggestedRemediation = "[Fact] public async Task Checkout_ValidOrder_PersistsTransaction() {}"
+        };
+
         var orchestration = new OrchestrationResult
         {
-            AllFindings = [finding1, finding2],
+            AllFindings = [finding1, finding2, finding3],
             SubagentResults =
             [
                 new SubagentResult { AgentName = "SecurityAuditor", Findings = [finding1], PromptTokens = 100, CompletionTokens = 50, DurationMs = 120 },
-                new SubagentResult { AgentName = "SpecDriftAgent", Findings = [finding2], PromptTokens = 80, CompletionTokens = 40, DurationMs = 90 }
+                new SubagentResult { AgentName = "SpecDriftAgent", Findings = [finding2], PromptTokens = 80, CompletionTokens = 40, DurationMs = 90 },
+                new SubagentResult { AgentName = "TestSentinelAgent", Findings = [finding3], PromptTokens = 90, CompletionTokens = 45, DurationMs = 95 }
             ],
-            TotalDurationMs = 210
+            TotalDurationMs = 305
         };
 
         var triageDecisions = new List<TriageDecision>
@@ -90,12 +106,34 @@ public class ReportingTests
             }
         };
 
+        var resolutionDecisions = new List<IssueResolutionDecision>
+        {
+            new()
+            {
+                Candidate = new IssueResolutionCandidate
+                {
+                    IssueNumber = 101,
+                    IssueTitle = "Isolate CI environment variables in GitService fallback test",
+                    IsResolved = true,
+                    HowItWasFixed = "Cleared GITHUB_SHA and GITHUB_REF_NAME in try/finally block.",
+                    ResolvingCommitShas = ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"],
+                    ResolvingCommitSummaries = ["`cfad09a` — *fix(tests): isolate CI environment variables in GitService fallback test*"]
+                },
+                VerifiedResolved = true,
+                ResolutionProbability = 0.96,
+                Action = IssueResolutionAction.CloseResolved,
+                TargetColumn = "Done",
+                Reason = "Verified fixed"
+            }
+        };
+
         return new ReportContext
         {
             Config = config,
             RepoContext = repoContext,
             Orchestration = orchestration,
             TriageDecisions = triageDecisions,
+            IssueResolutionDecisions = resolutionDecisions,
             GitCommitSha = "c0ffee1",
             GitBranch = "feature/test"
         };
@@ -114,21 +152,26 @@ public class ReportingTests
 
             var generatedFiles = await engine.GenerateReportsAsync(ctx);
 
-            generatedFiles.Should().HaveCount(5); // 1_audit-run.md, 2_tickets-report.md, 2_tickets-report.json, 3_security-report.md, 4_code-quality-report.md
+            generatedFiles.Should().HaveCount(6); // 1_audit-run.md, 2_tickets-report.md, 2_tickets-report.json, 3_security-report.md, 4_code-quality-report.md, 5_test-quality-report.md
 
             var auditRun = await File.ReadAllTextAsync(Path.Combine(tempDir, "1_audit-run.md"));
             auditRun.Should().Contain("c0ffee1");
             auditRun.Should().Contain("feature/test");
             auditRun.Should().Contain("SecurityAuditor");
+            auditRun.Should().Contain("TestSentinelAgent");
 
             var ticketsMd = await File.ReadAllTextAsync(Path.Combine(tempDir, "2_tickets-report.md"));
             ticketsMd.Should().Contain("Hardcoded Secret Token");
             ticketsMd.Should().Contain("P0");
+            ticketsMd.Should().Contain("Completed & Automatically Closed Issues");
+            ticketsMd.Should().Contain("#101");
+            ticketsMd.Should().Contain("cfad09a");
 
             var ticketsJson = await File.ReadAllTextAsync(Path.Combine(tempDir, "2_tickets-report.json"));
             using var doc = JsonDocument.Parse(ticketsJson);
             doc.RootElement.GetProperty("commitSha").GetString().Should().Be("c0ffee1");
             doc.RootElement.GetProperty("statistics").GetProperty("acceptedToBacklog").GetInt32().Should().Be(1);
+            doc.RootElement.GetProperty("statistics").GetProperty("closedResolvedIssues").GetInt32().Should().Be(1);
 
             var secMd = await File.ReadAllTextAsync(Path.Combine(tempDir, "3_security-report.md"));
             secMd.Should().Contain("A07: Identification and Authentication Failures");
@@ -136,6 +179,11 @@ public class ReportingTests
 
             var qualityMd = await File.ReadAllTextAsync(Path.Combine(tempDir, "4_code-quality-report.md"));
             qualityMd.Should().Contain("Missing Paginated Endpoint");
+
+            var testQualityMd = await File.ReadAllTextAsync(Path.Combine(tempDir, "5_test-quality-report.md"));
+            testQualityMd.Should().Contain("Test Pyramid Health Overview");
+            testQualityMd.Should().Contain("Missing Integration Test for Order Checkout");
+            testQualityMd.Should().Contain("Integration");
         }
         finally
         {

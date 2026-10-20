@@ -71,5 +71,54 @@ public class ConfigurationTests
         config.Should().NotBeNull();
         config.Triage.MaxIssuesPerRun.Should().Be(4);
         config.Reporting.OutputDir.Should().Be("./reports");
+        config.Subagents.Tests.Enabled.Should().BeTrue();
+        config.Subagents.PrReview.Enabled.Should().BeTrue();
+        config.Subagents.IssueResolution.Enabled.Should().BeTrue();
+        config.Triage.Jev.Thresholds.AutoCloseIssueConfidence.Should().Be(0.90);
+        config.Reporting.Reports.TestQuality.Should().BeTrue();
+        config.Github.ProjectsV2.Columns.Done.Should().Be("Done");
+    }
+
+    [Fact]
+    public void LoadFromString_WithPrReviewAndIssueResolutionSettings_ParsesCorrectly()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          tests:
+            enabled: true
+            tiers: ["unit", "e2e"]
+          prReview:
+            enabled: true
+            auditExistingReviews: true
+            maxInlineCommentsPerPr: 5
+          issueResolution:
+            enabled: true
+            autoCloseCompleted: true
+            commitLookbackCount: 25
+        triage:
+          jev:
+            thresholds:
+              autoCloseIssueConfidence: 0.92
+        github:
+          pullRequests:
+            enabled: true
+            defaultReviewEvent: "REQUEST_CHANGES"
+          issueClosure:
+            enabled: true
+            stateReason: "completed"
+          projectsV2:
+            columns:
+              done: "Completed"
+        """;
+
+        var config = ConfigLoader.LoadFromString(yaml);
+
+        config.Subagents.Tests.Tiers.Should().BeEquivalentTo(["unit", "e2e"]);
+        config.Subagents.PrReview.MaxInlineCommentsPerPr.Should().Be(5);
+        config.Subagents.IssueResolution.CommitLookbackCount.Should().Be(25);
+        config.Triage.Jev.Thresholds.AutoCloseIssueConfidence.Should().Be(0.92);
+        config.Github.PullRequests.DefaultReviewEvent.Should().Be("REQUEST_CHANGES");
+        config.Github.ProjectsV2.Columns.Done.Should().Be("Completed");
     }
 }

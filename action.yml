@@ -18,6 +18,10 @@ inputs:
     description: "GitHub repository coordinates ('owner/repo')"
     required: false
     default: ""
+  pr_number:
+    description: "Optional Pull Request number to audit for PR reviews and inline comments"
+    required: false
+    default: ""
   dry_run:
     description: "Perform audit without modifying GitHub issues or projects"
     required: false

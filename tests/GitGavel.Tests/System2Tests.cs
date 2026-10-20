@@ -1,9 +1,12 @@
 using FluentAssertions;
 using GitGavel.Configuration;
 using GitGavel.Discovery;
+using GitGavel.Git;
+using GitGavel.System1.Models;
 using GitGavel.System2;
 using GitGavel.System2.Abstractions;
 using GitGavel.System2.Agents;
+using GitGavel.System2.Models;
 using GitGavel.System2.Providers;
 
 namespace GitGavel.Tests;
@@ -144,10 +147,12 @@ public class System2Tests
         var mockClient = new MockLlmClient(req =>
         {
             var agentName = req.Prompt.Contains("Security") ? "SecurityAuditor" :
-                            req.Prompt.Contains("Spec") ? "SpecDriftAgent" : "RefactoringAgent";
+                            req.Prompt.Contains("Spec") ? "SpecDriftAgent" :
+                            req.Prompt.Contains("Test Sentinel") ? "TestSentinelAgent" : "RefactoringAgent";
 
             var category = req.Prompt.Contains("Security") ? "Security" :
-                           req.Prompt.Contains("Spec") ? "SpecDrift" : "Refactoring";
+                           req.Prompt.Contains("Spec") ? "SpecDrift" :
+                           req.Prompt.Contains("Test Sentinel") ? "Testing" : "Refactoring";
 
             var json = $$"""
             [
@@ -181,6 +186,7 @@ public class System2Tests
             RootDirectory = "/mock/repo",
             SpecFiles = [new ScannedFile("specs/api.md", "/mock/specs/api.md", 20, 100, "# API Spec", true)],
             SourceFiles = [new ScannedFile("src/Service.cs", "/mock/src/Service.cs", 30, 200, "public class Service {}", false)],
+            TestFiles = [new ScannedFile("tests/ServiceTests.cs", "/mock/tests/ServiceTests.cs", 25, 180, "public class ServiceTests {}", false, true)],
             SarifFindings = []
         };
 
@@ -189,10 +195,89 @@ public class System2Tests
         var result = await orchestrator.RunAllAsync(context, config);
 
         result.Should().NotBeNull();
-        result.SubagentResults.Should().HaveCount(3);
-        result.AllFindings.Should().HaveCount(3);
-        result.TotalPromptTokens.Should().Be(150);
-        result.TotalCompletionTokens.Should().Be(90);
+        result.SubagentResults.Should().HaveCount(4);
+        result.AllFindings.Should().HaveCount(4);
+        result.TotalPromptTokens.Should().Be(200);
+        result.TotalCompletionTokens.Should().Be(120);
+    }
+
+    [Fact]
+    public async Task PrReviewAuditorAgent_AuditsPrDiffsAndExistingReviews()
+    {
+        var mockClient = new MockLlmClient();
+        var agent = new PrReviewAuditorAgent(mockClient);
+
+        var prContext = new PullRequestContext
+        {
+            PrNumber = 42,
+            Title = "Fix GitService fallback test isolation",
+            HeadSha = "cfad09afc6f436fb3af957ff2d94eba2d3e1ea36",
+            ChangedFiles =
+            [
+                new PullRequestChangedFile("src/GitGavel/Git/GitService.cs", "modified", 15, 2, "@@ -10,2 +10,15 @@")
+            ],
+            ExistingReviewComments =
+            [
+                new ExistingPrReviewComment(10, "tests/GitServiceTests.cs", 20, "Isolate CI env vars", "reviewer", DateTime.UtcNow)
+            ]
+        };
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.AuditPullRequestAsync(prContext, repoContext, new GitGavelConfig());
+
+        result.IsSuccess.Should().BeTrue();
+        result.PrNumber.Should().Be(42);
+        result.ResolvedThreadsNotes.Should().NotBeEmpty();
+        result.InlineComments.Should().HaveCount(1);
+        result.InlineComments[0].FilePath.Should().Be("src/GitGavel/Git/GitService.cs");
+        result.InlineComments[0].SuggestedCode.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task IssueResolutionAgent_IdentifiesCompletedIssuesAndResolvingCommits()
+    {
+        var mockClient = new MockLlmClient();
+        var agent = new IssueResolutionAgent(mockClient);
+
+        var openIssues = new List<ExistingIssue>
+        {
+            new(101, "Isolate CI environment variables in GitService fallback test", "Fix test isolation", "open")
+        };
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = [],
+            RecentCommits =
+            [
+                new GitCommitRecord(
+                    "cfad09afc6f436fb3af957ff2d94eba2d3e1ea36",
+                    "cfad09a",
+                    "fix(tests): isolate CI environment variables in GitService fallback test",
+                    "Tyrone",
+                    "2026-10-20T14:04:33+01:00",
+                    ["tests/GitGavel.Tests/GitServiceTests.cs"])
+            ]
+        };
+
+        var result = await agent.EvaluateOpenIssuesAsync(openIssues, repoContext);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Candidates.Should().HaveCount(1);
+        var c = result.Candidates[0];
+        c.IssueNumber.Should().Be(101);
+        c.IsResolved.Should().BeTrue();
+        c.HowItWasFixed.Should().Contain("GITHUB_SHA");
+        c.ResolvingCommitShas.Should().Contain("cfad09afc6f436fb3af957ff2d94eba2d3e1ea36");
     }
 
     [Fact]

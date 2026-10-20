@@ -17,6 +17,19 @@ scope:
     - '**/bin/**'
     - '**/obj/**'
     - '**/*.Tests/**'
+    - 'tests/**'
+    - '**/.git/**'
+  tests:
+    include:
+    - '**/*.Tests/**/*.cs'
+    - 'tests/**/*.cs'
+    - '**/*.spec.ts'
+    - '**/*.test.ts'
+    - 'tests/**/*.py'
+    - 'e2e/**'
+    exclude:
+    - '**/bin/**'
+    - '**/obj/**'
     - '**/.git/**'
 subagents:
   apiKeyEnv: GEMINI_API_KEY
@@ -34,6 +47,29 @@ subagents:
     enabled: true
     provider: gemini
     model: gemini-2.5-flash
+  tests:
+    enabled: true
+    provider: gemini
+    model: gemini-2.5-flash
+    tiers:
+    - unit
+    - integration
+    - e2e
+  prReview:
+    enabled: true
+    provider: gemini
+    model: gemini-2.5-flash
+    auditExistingReviews: true
+    postInlineComments: true
+    postSummaryComment: true
+    maxInlineCommentsPerPr: 10
+  issueResolution:
+    enabled: true
+    provider: gemini
+    model: gemini-2.5-flash
+    autoCloseCompleted: true
+    commitLookbackCount: 50
+    includeCommitLinks: true
 triage:
   engine: jev
   jev:
@@ -41,6 +77,7 @@ triage:
     thresholds:
       autoBacklogConfidence: 0.85
       humanReviewConfidence: 0.5
+      autoCloseIssueConfidence: 0.90
     dedupeWithNoul: true
   maxIssuesPerRun: 4
 reporting:
@@ -54,15 +91,23 @@ reporting:
     tickets: true
     security: true
     codeQuality: true
+    testQuality: true
 github:
   labels:
   - ai-backlog
+  pullRequests:
+    enabled: true
+    defaultReviewEvent: COMMENT
+  issueClosure:
+    enabled: true
+    stateReason: completed
   projectsV2:
     enabled: true
     projectNumber: 2
     columns:
       backlog: Backlog
       humanReview: AI Triage
+      done: Done
       discard: Discarded
     fields:
       priority: Priority

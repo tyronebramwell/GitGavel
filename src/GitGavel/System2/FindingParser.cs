@@ -78,6 +78,8 @@ public static partial class FindingParser
         var details = GetString(elem, "details");
         var attackVector = GetString(elem, "attackVector");
         var owasp = GetString(elem, "owaspCategory") ?? GetString(elem, "owasp");
+        var testTier = GetString(elem, "testTier") ?? GetString(elem, "tier");
+        var testDefectType = GetString(elem, "testDefectType") ?? GetString(elem, "defectType");
 
         var startLine = GetInt(elem, "startLine", 1);
         var endLine = GetInt(elem, "endLine", startLine);
@@ -98,9 +100,206 @@ public static partial class FindingParser
             SuggestedRemediation = remediation,
             AttackVector = attackVector,
             OwaspCategory = owasp,
+            TestTier = testTier,
+            TestDefectType = testDefectType,
             Details = details,
             References = references
         };
+    }
+
+    public static PrReviewAuditResult ParsePrReviewAudit(string rawText, int prNumber, string headSha)
+    {
+        if (string.IsNullOrWhiteSpace(rawText))
+        {
+            return new PrReviewAuditResult { PrNumber = prNumber, HeadSha = headSha };
+        }
+
+        var jsonToParse = ExtractJson(rawText);
+        var inlineComments = new List<PrReviewCommentCandidate>();
+        var resolvedThreads = new List<string>();
+        var summaryObservations = "";
+        var recommendedEvent = "COMMENT";
+
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonToParse);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Object)
+            {
+                summaryObservations = GetString(root, "summaryObservations") ?? GetString(root, "summary") ?? "";
+                recommendedEvent = GetString(root, "recommendedEvent") ?? "COMMENT";
+
+                if (root.TryGetProperty("resolvedThreadsNotes", out var rt) && rt.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in rt.EnumerateArray())
+                    {
+                        if (item.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(item.GetString()))
+                        {
+                            resolvedThreads.Add(item.GetString()!);
+                        }
+                    }
+                }
+
+                if (root.TryGetProperty("inlineComments", out var ic) && ic.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in ic.EnumerateArray())
+                    {
+                        var comment = ParseSinglePrComment(item);
+                        if (comment != null) inlineComments.Add(comment);
+                    }
+                }
+            }
+            else if (root.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in root.EnumerateArray())
+                {
+                    var comment = ParseSinglePrComment(item);
+                    if (comment != null) inlineComments.Add(comment);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Best-effort fallback
+        }
+
+        return new PrReviewAuditResult
+        {
+            PrNumber = prNumber,
+            HeadSha = headSha,
+            SummaryObservations = summaryObservations,
+            ResolvedThreadsNotes = resolvedThreads,
+            InlineComments = inlineComments,
+            RecommendedEvent = recommendedEvent
+        };
+    }
+
+    private static PrReviewCommentCandidate? ParseSinglePrComment(JsonElement elem)
+    {
+        if (elem.ValueKind != JsonValueKind.Object) return null;
+
+        var filePath = GetString(elem, "filePath") ?? GetString(elem, "path") ?? "Unknown";
+        var line = GetInt(elem, "line", GetInt(elem, "startLine", 1));
+        var category = GetString(elem, "category") ?? "CodeQuality";
+        var severity = GetString(elem, "severity") ?? "Medium";
+        var title = GetString(elem, "title") ?? "PR Review Finding";
+        var body = GetString(elem, "body") ?? GetString(elem, "comment") ?? GetString(elem, "summary") ?? "";
+        var suggestedCode = GetString(elem, "suggestedCode") ?? GetString(elem, "suggestion");
+
+        return new PrReviewCommentCandidate
+        {
+            FilePath = filePath,
+            Line = line,
+            Category = category,
+            Severity = severity,
+            Title = title,
+            Body = body,
+            SuggestedCode = suggestedCode
+        };
+    }
+
+    public static List<IssueResolutionCandidate> ParseIssueResolutions(string rawText)
+    {
+        var list = new List<IssueResolutionCandidate>();
+        if (string.IsNullOrWhiteSpace(rawText)) return list;
+
+        var jsonToParse = ExtractJson(rawText);
+
+        try
+        {
+            using var doc = JsonDocument.Parse(jsonToParse);
+            var root = doc.RootElement;
+
+            if (root.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in root.EnumerateArray())
+                {
+                    var res = ParseSingleIssueResolution(item);
+                    if (res != null) list.Add(res);
+                }
+            }
+            else if (root.ValueKind == JsonValueKind.Object)
+            {
+                if (root.TryGetProperty("resolutions", out var arr) && arr.ValueKind == JsonValueKind.Array)
+                {
+                    foreach (var item in arr.EnumerateArray())
+                    {
+                        var res = ParseSingleIssueResolution(item);
+                        if (res != null) list.Add(res);
+                    }
+                }
+                else
+                {
+                    var res = ParseSingleIssueResolution(root);
+                    if (res != null) list.Add(res);
+                }
+            }
+        }
+        catch (JsonException)
+        {
+            // Fallback on malformed JSON
+        }
+
+        return list;
+    }
+
+    private static IssueResolutionCandidate? ParseSingleIssueResolution(JsonElement elem)
+    {
+        if (elem.ValueKind != JsonValueKind.Object) return null;
+
+        var issueNumber = GetInt(elem, "issueNumber", GetInt(elem, "number", 0));
+        if (issueNumber <= 0) return null;
+
+        var title = GetString(elem, "issueTitle") ?? GetString(elem, "title") ?? $"Issue #{issueNumber}";
+        var isResolved = true;
+        if (elem.TryGetProperty("isResolved", out var irProp) && (irProp.ValueKind == JsonValueKind.True || irProp.ValueKind == JsonValueKind.False))
+        {
+            isResolved = irProp.GetBoolean();
+        }
+
+        var howFixed = GetString(elem, "howItWasFixed") ?? GetString(elem, "explanation") ?? GetString(elem, "summary") ?? "Resolved in recent commits.";
+
+        var commitShas = new List<string>();
+        if (elem.TryGetProperty("resolvingCommitShas", out var shasProp) && shasProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var s in shasProp.EnumerateArray())
+            {
+                if (s.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(s.GetString()))
+                {
+                    commitShas.Add(s.GetString()!);
+                }
+            }
+        }
+
+        var commitSummaries = new List<string>();
+        if (elem.TryGetProperty("resolvingCommitSummaries", out var sumProp) && sumProp.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var s in sumProp.EnumerateArray())
+            {
+                if (s.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(s.GetString()))
+                {
+                    commitSummaries.Add(s.GetString()!);
+                }
+            }
+        }
+
+        return new IssueResolutionCandidate
+        {
+            IssueNumber = issueNumber,
+            IssueTitle = title,
+            IsResolved = isResolved,
+            HowItWasFixed = howFixed,
+            ResolvingCommitShas = commitShas,
+            ResolvingCommitSummaries = commitSummaries
+        };
+    }
+
+    private static string ExtractJson(string rawText)
+    {
+        var trimmed = rawText.Trim();
+        var match = MarkdownJsonFence().Match(trimmed);
+        return match.Success ? match.Groups[1].Value.Trim() : trimmed;
     }
 
     private static string? GetString(JsonElement elem, string propName)

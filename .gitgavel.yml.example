@@ -6,7 +6,10 @@ scope:
     include: ["docs/**/*.md", "specs/**/*.md", "api/openapi.json", "SPECIFICATION.md", "Dockerfile", "action.yml"]
   source:
     include: ["**/*.cs", "**/*.ts", "**/*.py"]
-    exclude: ["**/bin/**", "**/obj/**", "**/*.Tests/**", "**/.git/**"]
+    exclude: ["**/bin/**", "**/obj/**", "**/*.Tests/**", "tests/**", "**/.git/**"]
+  tests:
+    include: ["**/*.Tests/**/*.cs", "tests/**/*.cs", "**/*.spec.ts", "**/*.test.ts", "tests/**/*.py", "e2e/**"]
+    exclude: ["**/bin/**", "**/obj/**", "**/.git/**"]
 
 # System 2 Subagents (Generative LLMs)
 subagents:
@@ -25,6 +28,26 @@ subagents:
     enabled: true
     provider: "gemini"
     model: "gemini-2.5-flash"
+  tests:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-pro"
+    tiers: ["unit", "integration", "e2e"]
+  prReview:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-pro"
+    auditExistingReviews: true
+    postInlineComments: true
+    postSummaryComment: true
+    maxInlineCommentsPerPr: 10
+  issueResolution:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-flash"
+    autoCloseCompleted: true
+    commitLookbackCount: 50
+    includeCommitLinks: true
 
 # System 1 Triage Gatekeeper (Jev Decision Engine)
 triage:
@@ -32,32 +55,41 @@ triage:
   jev:
     apiKeyEnv: "JEV_API_KEY"
     thresholds:
-      autoBacklogConfidence: 0.85   # > 0.85 -> Backlog
-      humanReviewConfidence: 0.50   # 0.50 - 0.85 -> AI Triage
+      autoBacklogConfidence: 0.85     # > 0.85 -> Backlog
+      humanReviewConfidence: 0.50     # 0.50 - 0.85 -> AI Triage
+      autoCloseIssueConfidence: 0.90  # >= 0.90 -> Verify fix, post commit summary & close issue
     dedupeWithNoul: true
-  maxIssuesPerRun: 4                # Safety cap per audit run
+  maxIssuesPerRun: 4                  # Safety cap per audit run
 
 # Developer Reporting Engine
 reporting:
   outputDir: "./reports"
-  githubStepSummary: true           # Writes overview directly to GitHub Actions UI
+  githubStepSummary: true             # Writes overview directly to GitHub Actions UI
   formats: ["markdown", "json"]
   reports:
     auditRun: true
     tickets: true
     security: true
     codeQuality: true
+    testQuality: true
 
-# GitHub Projects (v2) Integration
+# GitHub Projects (v2), Issues & PR Integration
 github:
   labels:
     - "ai-backlog"
+  pullRequests:
+    enabled: true
+    defaultReviewEvent: "COMMENT"
+  issueClosure:
+    enabled: true
+    stateReason: "completed"
   projectsV2:
     enabled: true
     projectNumber: 2
     columns:
       backlog: "Backlog"
       humanReview: "AI Triage"
+      done: "Done"
       discard: "Discarded"
     fields:
       priority: "Priority" # Maps Jev Score (1-5) to Project Priority

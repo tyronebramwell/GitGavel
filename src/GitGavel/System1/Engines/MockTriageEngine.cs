@@ -135,4 +135,120 @@ public class MockTriageEngine : ITriageEngine
 
         return decisions;
     }
+
+    public Task<List<PrCommentTriageDecision>> TriagePrReviewCommentsAsync(
+        IReadOnlyList<PrReviewCommentCandidate> candidates,
+        IReadOnlyList<ExistingPrReviewComment> existingComments,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        var decisions = new List<PrCommentTriageDecision>();
+
+        foreach (var candidate in candidates)
+        {
+            var duplicate = existingComments.FirstOrDefault(e =>
+                e.FilePath.Equals(candidate.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                (e.Line == candidate.Line || e.Body.Contains(candidate.Title, StringComparison.OrdinalIgnoreCase)));
+
+            if (duplicate != null)
+            {
+                decisions.Add(new PrCommentTriageDecision
+                {
+                    Candidate = candidate,
+                    IsDuplicate = true,
+                    DuplicateOfCommentId = duplicate.Id,
+                    DuplicateProbability = 0.93,
+                    JevScore = 1.0,
+                    PriorityLabel = "P3",
+                    Action = PrCommentAction.Discard,
+                    Confidence = 0.93,
+                    Reason = $"Suppressed duplicate of existing PR review comment #{duplicate.Id} (P=93%)"
+                });
+                continue;
+            }
+
+            var score = candidate.Severity switch
+            {
+                "Critical" => 5.0,
+                "High" => 4.0,
+                "Medium" => 3.0,
+                _ => 2.0
+            };
+
+            var prio = score >= 4.5 ? "P0" : score >= 3.5 ? "P1" : score >= 2.5 ? "P2" : "P3";
+            var action = score >= 2.5 ? PrCommentAction.PostInlineReview : PrCommentAction.SummaryCommentOnly;
+
+            decisions.Add(new PrCommentTriageDecision
+            {
+                Candidate = candidate,
+                IsDuplicate = false,
+                DuplicateProbability = 0.05,
+                JevScore = score,
+                PriorityLabel = prio,
+                Action = action,
+                Confidence = 0.94,
+                Reason = $"Simulated PR review triage ({prio}, Score: {score:F1}/5.0)"
+            });
+        }
+
+        var maxInline = config.Subagents.PrReview.MaxInlineCommentsPerPr;
+        var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
+        if (maxInline > 0 && inlineAccepted.Count > maxInline)
+        {
+            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(maxInline).ToHashSet();
+            for (var i = 0; i < decisions.Count; i++)
+            {
+                var d = decisions[i];
+                if (d.Action == PrCommentAction.PostInlineReview && !topInline.Contains(d))
+                {
+                    decisions[i] = d with
+                    {
+                        Action = PrCommentAction.SummaryCommentOnly,
+                        Reason = $"Moved to PR summary: maxInlineCommentsPerPr cap ({maxInline}) reached."
+                    };
+                }
+            }
+        }
+
+        return Task.FromResult(decisions);
+    }
+
+    public Task<List<IssueResolutionDecision>> VerifyIssueResolutionsAsync(
+        IReadOnlyList<IssueResolutionCandidate> candidates,
+        IReadOnlyList<ExistingIssue> openIssues,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        var decisions = new List<IssueResolutionDecision>();
+
+        foreach (var candidate in candidates)
+        {
+            if (candidate.IsResolved && candidate.ResolvingCommitShas.Count > 0)
+            {
+                decisions.Add(new IssueResolutionDecision
+                {
+                    Candidate = candidate,
+                    VerifiedResolved = true,
+                    ResolutionProbability = 0.96,
+                    Action = IssueResolutionAction.CloseResolved,
+                    TargetColumn = config.Github.ProjectsV2.Columns.Done,
+                    Reason = $"Verified resolved via simulated Jev Noul (P=96% >= {config.Triage.Jev.Thresholds.AutoCloseIssueConfidence:P0})"
+                });
+            }
+            else
+            {
+                decisions.Add(new IssueResolutionDecision
+                {
+                    Candidate = candidate,
+                    VerifiedResolved = false,
+                    ResolutionProbability = 0.20,
+                    Action = IssueResolutionAction.LeaveOpen,
+                    TargetColumn = config.Github.ProjectsV2.Columns.Backlog,
+                    Reason = "Candidate does not cite resolving commits or is marked unresolved."
+                });
+            }
+        }
+
+        return Task.FromResult(decisions);
+    }
 }

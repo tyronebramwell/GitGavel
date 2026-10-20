@@ -132,6 +132,59 @@ public class TicketsReporter : BaseMarkdownReporter
             sb.AppendLine();
         }
 
+        // 5. Completed & Closed Issues (Phase 7)
+        var closedResolutions = ctx.IssueResolutionDecisions
+            .Where(d => d.Action == IssueResolutionAction.CloseResolved)
+            .ToList();
+
+        sb.AppendLine($"## 5. Completed & Automatically Closed Issues ({closedResolutions.Count})");
+        sb.AppendLine();
+        if (closedResolutions.Count == 0)
+        {
+            sb.AppendLine("_No open issues were verified as resolved during this audit run._");
+        }
+        else
+        {
+            sb.AppendLine("| Issue # | Title | How It Was Fixed | Resolving Commits | Jev Confidence | Target Column |");
+            sb.AppendLine("| :--- | :--- | :--- | :--- | :--- | :--- |");
+            foreach (var r in closedResolutions)
+            {
+                var title = EscapeCell(r.Candidate.IssueTitle);
+                var how = EscapeCell(r.Candidate.HowItWasFixed);
+                var commits = r.Candidate.ResolvingCommitSummaries.Count > 0
+                    ? EscapeCell(string.Join("; ", r.Candidate.ResolvingCommitSummaries))
+                    : EscapeCell(string.Join(", ", r.Candidate.ResolvingCommitShas.Select(s => s.Length > 7 ? $"`{s[..7]}`" : $"`{s}`")));
+                sb.AppendLine($"| #{r.Candidate.IssueNumber} | {title} | {how} | {commits} | **{r.ResolutionProbability:P0}** | `{r.TargetColumn}` |");
+            }
+        }
+        sb.AppendLine();
+
+        // 6. Pull Request Review Actions (Phase 6)
+        if (ctx.Orchestration.PrReviewAudit != null || ctx.PrCommentDecisions.Count > 0)
+        {
+            var prNum = ctx.ActivePullRequestNumber ?? ctx.Orchestration.PrReviewAudit?.PrNumber ?? 0;
+            sb.AppendLine($"## 6. Pull Request Review Actions (PR #{prNum})");
+            sb.AppendLine();
+            if (ctx.PrCommentDecisions.Count == 0)
+            {
+                sb.AppendLine("_No inline PR review comments generated._");
+            }
+            else
+            {
+                sb.AppendLine("| # | Priority | Category | File & Line | Title | Action | Jev Score |");
+                sb.AppendLine("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |");
+                for (var i = 0; i < ctx.PrCommentDecisions.Count; i++)
+                {
+                    var p = ctx.PrCommentDecisions[i];
+                    var cat = EscapeCell(p.Candidate.Category);
+                    var title = EscapeCell(p.Candidate.Title);
+                    var file = EscapeCell(p.Candidate.FilePath);
+                    sb.AppendLine($"| {i + 1} | **{p.PriorityLabel}** | `{cat}` | `{file}:{p.Candidate.Line}` | {title} | `{p.Action}` | {p.JevScore:F1}/5.0 |");
+                }
+            }
+            sb.AppendLine();
+        }
+
         return sb.ToString();
     }
 
@@ -142,6 +195,7 @@ public class TicketsReporter : BaseMarkdownReporter
             timestamp = ctx.EndTimeUtc.ToString("o"),
             commitSha = ctx.GitCommitSha,
             branch = ctx.GitBranch,
+            activePullRequest = ctx.ActivePullRequestNumber,
             durationSeconds = ctx.Duration.TotalSeconds,
             statistics = new
             {
@@ -149,7 +203,9 @@ public class TicketsReporter : BaseMarkdownReporter
                 acceptedToBacklog = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog),
                 routedToReview = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview),
                 suppressedDuplicates = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.SuppressedDuplicate),
-                discardedNoise = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.DiscardedNoise)
+                discardedNoise = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.DiscardedNoise),
+                closedResolvedIssues = ctx.IssueResolutionDecisions.Count(d => d.Action == IssueResolutionAction.CloseResolved),
+                prInlineComments = ctx.PrCommentDecisions.Count(d => d.Action == PrCommentAction.PostInlineReview)
             },
             backlogIssues = ctx.TriageDecisions
                 .Where(d => d.Status == TriageStatus.AcceptedToBacklog)
@@ -191,6 +247,30 @@ public class TicketsReporter : BaseMarkdownReporter
                     matchedIssueNumber = d.DuplicateOfIssueNumber,
                     noulProbability = d.DuplicateProbability,
                     filePath = d.Finding.FilePath
+                }),
+            closedIssues = ctx.IssueResolutionDecisions
+                .Where(d => d.Action == IssueResolutionAction.CloseResolved)
+                .Select(d => new
+                {
+                    issueNumber = d.Candidate.IssueNumber,
+                    title = d.Candidate.IssueTitle,
+                    howItWasFixed = d.Candidate.HowItWasFixed,
+                    resolvingCommitShas = d.Candidate.ResolvingCommitShas,
+                    resolvingCommitSummaries = d.Candidate.ResolvingCommitSummaries,
+                    jevResolutionConfidence = d.ResolutionProbability,
+                    targetColumn = d.TargetColumn
+                }),
+            prReviewComments = ctx.PrCommentDecisions
+                .Select(d => new
+                {
+                    filePath = d.Candidate.FilePath,
+                    line = d.Candidate.Line,
+                    category = d.Candidate.Category,
+                    priority = d.PriorityLabel,
+                    title = d.Candidate.Title,
+                    body = d.Candidate.Body,
+                    action = d.Action.ToString(),
+                    jevScore = d.JevScore
                 })
         };
 

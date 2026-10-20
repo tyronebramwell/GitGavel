@@ -2,29 +2,31 @@
 
 ## 1. Executive Summary
 
-**GitGavel** is an automated repository audit tool designed to run in continuous integration (CI) or as a standalone CLI. It employs a **hybrid System 1 + System 2 multi-agent architecture**:
+**GitGavel** is an automated repository and pull request audit tool designed to run in continuous integration (CI) or as a standalone CLI. It employs a **hybrid System 1 + System 2 multi-agent architecture**:
 
-* **System 2 (Generative Subagents)**: Deep reasoning agents (powered by Claude/Gemini/OpenAI) audit the repository across specification alignment, security posture, code architecture, and automated test completeness (Unit, Integration, E2E), generating structured remediation plans.
-* **System 1 (Jev Decision Engine)**: A fast, probabilistic decision engine (powered by TypeSafe Jev) validates candidate findings in milliseconds, performing pairwise duplicate checks via `Noul` probabilities, calibrated urgency scoring via `Score`, and triaging tickets into appropriate **GitHub Projects (v2)** columns via `Choice`.
-* **Developer Reporting Engine**: Emits dedicated, structured reports (Run Log, Tickets Created/Updated, Security Report, Code Quality Report, Test Sentinel Report) available both locally and as GitHub Action Step Summaries and downloadable CI artifacts.
+* **System 2 (Generative Subagents)**: Deep reasoning agents (powered by Claude/Gemini/OpenAI) audit the repository and active Pull Requests across specification alignment, security posture, code architecture, automated test completeness (Unit, Integration, E2E), PR diffs/reviews, and open issue resolution status, generating structured remediation plans, PR review comments, and issue closure summaries.
+* **System 1 (Jev Decision Engine)**: A fast, probabilistic decision engine (powered by TypeSafe Jev) validates candidate findings, PR review comments, and issue resolution proofs in milliseconds—performing pairwise duplicate checks via `Noul` probabilities, verification of completed issues via `Noul`, calibrated urgency scoring via `Score`, and triaging tickets/reviews into appropriate **GitHub Projects (v2)** columns (`Backlog`, `AI Triage`, `Done`, `Discard`) and PR review actions via `Choice`.
+* **Developer Reporting Engine**: Emits dedicated, structured reports (Run Log, Tickets Created/Updated/Closed & PR Reviews, Security Report, Code Quality Report, Test Sentinel Report) available both locally and as GitHub Action Step Summaries and downloadable CI artifacts.
 
 ---
 
 ## 2. Core Objectives & Non-Goals
 
 ### Objectives
-- **Multi-Domain Specialization**: Dedicated subagents for Spec Drift, Security, Architecture/Refactoring, and Automated Testing to eliminate prompt dilution.
+- **Multi-Domain Specialization**: Dedicated subagents for Spec Drift, Security, Architecture/Refactoring, Automated Testing, PR Review Auditing, and Issue Resolution Verification to eliminate prompt dilution.
 - **Comprehensive Test Pyramid Auditing**: Automated detection of missing unit, integration, and end-to-end (E2E) tests, extra scenario coverage, and test reliability improvements.
-- **Probabilistic Gatekeeping with Jev**: Sub-second triage, calibrated confidence scoring, and automated routing to an "Unsure / Maintainer Review" queue when confidence is borderline.
-- **Pairwise Deduplication via Jev `Noul`**: Probabilistic duplicate detection against existing issues without expensive generative LLM calls.
-- **Developer-Centric Reporting**: Comprehensive developer reports for pipeline logs, created tickets, security posture, architectural health, and automated test coverage.
-- **Zero-Infra Context Routing**: Avoids external vector databases in favor of deterministic AST and targeted file routing.
-- **GitHub Projects (v2) Automation**: Seamless GraphQL automation mapping findings directly to project columns (`Backlog`, `AI Triage`, `Discard`).
+- **Pull Request Review Auditing & Automated Commenting**: Deep inspection of Pull Request diffs and existing PR review threads to post high-signal inline review comments and summary reviews directly on Pull Requests.
+- **Automated Completed Issue Closure**: Continuous verification of open GitHub issues against the current codebase and git commit history, automatically closing resolved issues with an explanatory comment detailing how the issue was fixed and referencing the specific commit SHAs.
+- **Probabilistic Gatekeeping with Jev**: Sub-second triage, calibrated confidence scoring, high-confidence issue closure verification, and automated routing to an "Unsure / Maintainer Review" queue when confidence is borderline.
+- **Pairwise Deduplication via Jev `Noul`**: Probabilistic duplicate detection against existing issues and existing PR review comments without expensive generative LLM calls.
+- **Developer-Centric Reporting**: Comprehensive developer reports for pipeline logs, created/closed tickets, PR review actions, security posture, architectural health, and automated test coverage.
+- **Zero-Infra Context Routing**: Avoids external vector databases in favor of deterministic AST, git history, PR diff, and targeted file routing.
+- **GitHub Projects (v2) Automation**: Seamless GraphQL automation mapping findings and resolved issues directly to project columns (`Backlog`, `AI Triage`, `Done`, `Discard`).
 - **Container-First Distribution**: Packaged as a self-contained, trimmed .NET 10 Alpine container image.
 
 ### Non-Goals
-- **Autonomous Code Commits**: The tool will not auto-commit changes or merge pull requests; its boundary is backlog ticket creation.
-- **External Vector DB Hosting**: No hosted vector DBs or cold embedding passes in CI; context routing is handled via file patterns and AST inspection.
+- **Autonomous Code Commits**: The tool will not auto-commit code changes or merge pull requests; its boundary is backlog ticket lifecycle management (creating, updating, and closing resolved issues) and Pull Request review commenting.
+- **External Vector DB Hosting**: No hosted vector DBs or cold embedding passes in CI; context routing is handled via file patterns, git commit history, and AST inspection.
 
 ---
 
@@ -35,6 +37,7 @@ flowchart TD
     subgraph Host ["1. Context & Inputs"]
         Config[".gitgavel.yml"]
         Repo["Source Code + Specs + Tests + SARIF Reports"]
+        GitHistory["Git Commit History & PR Diffs / Reviews"]
         ExistingIssues["Existing GitHub Issues (open/closed)"]
     end
 
@@ -43,25 +46,32 @@ flowchart TD
         SecAgent["🛡️ Security Auditor Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
         RefactorAgent["⚙️ Refactor & Architecture Agent\n(Gemini 2.5 Flash / GPT-4o-mini)"]
         TestAgent["🧪 Test Sentinel Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
+        PRAgent["🔍 PR Review Auditor Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
+        ResolutionAgent["✅ Issue Resolution Agent\n(Gemini 2.5 Flash / Claude Sonnet)"]
     end
 
     subgraph System1 ["3. Triage & Gatekeeping (Jev Decision Engine - System 1)"]
-        JevDedupe["Jev Noul (Boolean Probability)\n'Is this finding a duplicate of #X?'"]
+        JevDedupe["Jev Noul (Boolean Probability)\n'Duplicate of #X / Existing PR Comment?'"]
+        JevVerifyFix["Jev Noul (Boolean Probability)\n'Is Issue #X truly resolved by commits?'"]
         JevScore["Jev Score (1 - 5)\n'Calibrated Priority & Urgency'"]
-        JevRoute["Jev Choice\n'Auto-Backlog | Needs Review | Discard'"]
+        JevRoute["Jev Choice\n'Backlog | Needs Review | Post PR Review | Close Issue | Discard'"]
         
-        JevDedupe -->|Novel Finding| JevScore
+        JevDedupe -->|Novel Finding / PR Comment| JevScore
+        JevVerifyFix -->|Confirmed Fixed| JevRoute
         JevScore --> JevRoute
     end
 
     subgraph Targets ["4. Outputs & Execution"]
-        GH_Projects["GitHub Projects v2 & Issues"]
-        ReportsEngine["Developer Reporting Engine\n- Audit Run Log\n- Tickets Report\n- Security Report\n- Code Quality Report\n- Test Sentinel Report"]
+        GH_Projects["GitHub Projects v2, Issues & PR Reviews\n(Create / Comment / Close Fixed Issues)"]
+        ReportsEngine["Developer Reporting Engine\n- Audit Run Log\n- Tickets & PR Review Report\n- Security Report\n- Code Quality Report\n- Test Sentinel Report"]
     end
 
     Host --> System2
-    System2 -->|Draft Findings & Snippets| JevDedupe
+    System2 -->|Draft Findings & PR Reviews| JevDedupe
+    System2 -->|Candidate Issue Closures & Commit Proofs| JevVerifyFix
     ExistingIssues -.->|Context| JevDedupe
+    ExistingIssues -.->|Open Issues| System2
+    GitHistory -.->|Commits & Diffs| System2
 
     JevRoute --> GH_Projects
     JevRoute --> ReportsEngine
@@ -100,34 +110,68 @@ flowchart TD
 * **Inputs**: Test files (`tests/**/*.cs`, `**/*.spec.ts`, `**/*.test.ts`, `tests/**/*.py`, `cypress/`, `playwright/`, `e2e/`), production source files, domain models, API routes, and AST complexity hotspots.
 * **Output**: Candidate findings citing untested logic, missing test scenarios, concrete test implementation blueprints with executable code snippets (xUnit, NUnit, Jest/Vitest, PyTest, Playwright), and targeted test tier classification.
 
+### 4.5 🔍 PR Review Auditor Agent
+* **Role**: Audits open Pull Requests, existing PR reviews, and code diffs to provide automated architectural, security, spec-compliance, and test-coverage feedback directly on the PR.
+* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Core Responsibilities**:
+  * **PR Diff & Context Inspection**: Analyzes changed files, patch hunks, commit messages in the PR, and surrounding repository context to catch regressions, security flaws, spec drift, or missing tests before merge.
+  * **Existing PR Review & Comment Auditing**: Evaluates existing human and bot PR reviews/threads to avoid redundant feedback, verify whether previously requested changes in review threads have been addressed in subsequent commits, and highlight unresolved review concerns.
+  * **Actionable Inline & Summary Comments**: Generates line-specific inline review comments with concrete code suggestion blocks (` ```suggestion `) alongside a cohesive top-level PR review summary comment.
+* **Inputs**: Pull Request metadata (title, body, base/head branches), unified git diffs/patches, PR commit list, existing PR reviews and review comment threads, and repository spec files.
+* **Output**: Structured PR review payload containing inline file/line comments, thread resolution assessments, overall review summary, and recommended review action (`COMMENT`, `REQUEST_CHANGES`, or `APPROVE`).
+
+### 4.6 ✅ Issue Resolution & Closure Agent
+* **Role**: Audits open GitHub issues against the current repository state and commit history to detect completed work and automatically close resolved issues with a clear audit trail.
+* **Model Tier**: Fast / High Reasoning (Gemini 2.5 Flash / Claude 3.5 Sonnet).
+* **Core Responsibilities**:
+  * **Completion Detection**: Cross-references open GitHub issues (including previously generated `ai-backlog` tickets and human-authored issues) against current source code, tests, and recent git commit history (`git log`).
+  * **Commit Attribution**: Identifies the exact commit SHA(s) and commit messages that implemented the fix, refactoring, or test coverage requested by the issue.
+  * **Resolution Summary Generation**: Drafts a concise closing comment explaining *how* the issue was resolved in the codebase and listing the specific commit SHA(s) that fixed it.
+* **Inputs**: Open GitHub issues (title, body, embedded `gitgavel-metadata`, target file paths), git commit log (`git log --stat -p`), and current file contents of affected modules.
+* **Output**: Candidate issue closure records containing the target Issue `#`, a verification summary of how the fix was implemented, the list of resolving commit SHAs, and confidence evidence for System 1 validation.
+
 ---
 
 ## 5. Jev Decision Engine (System 1: Triage Gatekeeper)
 
-Once candidate findings are generated by the System 2 subagents, they pass through **Jev** for sub-second classification and validation:
+Once candidate findings, PR review comments, and issue resolution proofs are generated by the System 2 subagents, they pass through **Jev** for sub-second classification and validation:
 
 ### 5.1 Deduplication with Jev `Noul`
 * **Primitive**: `Noul` (Boolean probability $0.0 \dots 1.0$).
-* **Query**: `Does candidate finding [Candidate_A] represent the same core problem or refactoring target as existing issue #[Issue_N]?`
+* **Queries**:
+  * *Issue Deduplication*: `Does candidate finding [Candidate_A] represent the same core problem or refactoring target as existing issue #[Issue_N]?`
+  * *PR Comment Deduplication*: `Does candidate PR comment [Comment_A] duplicate an existing review comment or thread on Pull Request #[PR_N]?`
 * **Behavior**:
-  * $P \ge 0.85$: Flagged as duplicate $\rightarrow$ **Skip creation**.
-  * $P \le 0.15$: Novel issue $\rightarrow$ **Proceed to scoring**.
+  * $P \ge 0.85$: Flagged as duplicate $\rightarrow$ **Skip creation / Suppress PR comment**.
+  * $P \le 0.15$: Novel finding $\rightarrow$ **Proceed to scoring**.
   * $0.15 < P < 0.85$: Uncertain $\rightarrow$ Add reference to existing issue and route to human review.
 
-### 5.2 Calibrated Priority Scoring with Jev `Score`
+### 5.2 Issue Resolution Verification with Jev `Noul`
+* **Primitive**: `Noul` (Boolean probability $0.0 \dots 1.0$).
+* **Query**: `Given open issue #[Issue_N] and the code changes in commit(s) [Commit_SHAs], has the root cause or requirement described in the issue been completely resolved?`
+* **Behavior**:
+  * $P \ge 0.90$: Confirmed resolved $\rightarrow$ **Post closing summary comment with commit references, close issue as `completed`, and move project card to `Done`**.
+  * $0.60 \le P < 0.90$: Partially resolved or uncertain $\rightarrow$ **Post progress comment referencing the commits without closing the issue**.
+  * $P < 0.60$: Not resolved $\rightarrow$ **Leave issue open (no action)**.
+
+### 5.3 Calibrated Priority Scoring with Jev `Score`
 * **Primitive**: `Score` (Scale 1 to 5).
-* **Criteria**: Evaluates real-world blast radius, maintainability impact, and business urgency.
+* **Criteria**: Evaluates real-world blast radius, maintainability impact, and business urgency for both backlog issues and PR review findings.
 * **Mapping**:
-  * Score 5: **P0 (Critical)** — Immediate action required (e.g. active security risk).
+  * Score 5: **P0 (Critical)** — Immediate action required (e.g. active security risk; blocks PR merge).
   * Score 4: **P1 (High)** — High priority bug or severe spec divergence.
   * Score 3: **P2 (Medium)** — Standard refactoring or backlog improvement.
-  * Score 1–2: **P3 / Low** — Minor suggestion.
+  * Score 1–2: **P3 / Low** — Minor suggestion or nit.
 
-### 5.3 Automated Column Routing with Jev `Choice`
-* **Primitive**: `Choice` (`["Backlog", "NeedsHumanReview", "Discard"]`).
+### 5.4 Automated Routing with Jev `Choice`
+* **Primitive**: `Choice`
+  * *Backlog & Issue Lifecycle*: `["Backlog", "NeedsHumanReview", "CloseResolved", "Discard"]`
+  * *PR Review Actions*: `["PostInlineReview", "SummaryCommentOnly", "Discard"]`
 * **Routing Logic**:
   * **`Backlog`**: Finding is novel, high-confidence, and meets the severity threshold. Issue created and assigned to the project backlog.
   * **`NeedsHumanReview`**: Finding is borderline or potential duplicate. Issue created with `needs-maintainer-review` label and placed in the project `AI Triage` column.
+  * **`CloseResolved`**: Open issue is verified as fixed ($P \ge 0.90$). Issue is commented on with the fix explanation and commit SHAs, closed as completed, and moved to the `Done` column in GitHub Projects v2.
+  * **`PostInlineReview` / `SummaryCommentOnly`**: High-signal PR review finding is posted either as an inline diff review comment or rolled into the PR summary comment.
   * **`Discard`**: Finding is low-value, subjective, or probable hallucination. Silently suppressed.
 
 ---
@@ -138,8 +182,8 @@ GitGavel generates five distinct reports at the end of each run, saving them to 
 
 ```
 reports/
-├── 1_audit-run.md            <-- Execution log, timings, tokens, triage stats
-├── 2_tickets-report.md       <-- Issues created, updated, or skipped (table format)
+├── 1_audit-run.md            <-- Execution log, timings, tokens, triage & PR/closure stats
+├── 2_tickets-report.md       <-- Issues created, updated, closed, skipped, and PR comments (table format)
 ├── 2_tickets-report.json     <-- Structured JSON for programmatic parsing
 ├── 3_security-report.md      <-- Deep vulnerability breakdown & OWASP mapping
 ├── 4_code-quality-report.md  <-- Spec drift, complexity hotspots, refactoring
@@ -148,16 +192,18 @@ reports/
 
 ### 6.1 Report 1: Audit Run Log (`1_audit-run.md`)
 Designed for maintainers to see exactly what the auditor did during execution:
-* **Execution Metrics**: Start time, duration, git commit SHA, branch.
-* **Scope Scanned**: Total files indexed, spec files parsed, test files discovered, lines of code evaluated.
+* **Execution Metrics**: Start time, duration, git commit SHA, branch, active PR number (if run in PR context).
+* **Scope Scanned**: Total files indexed, spec files parsed, test files discovered, commits analyzed, PR review threads audited, lines of code evaluated.
 * **Agent Diagnostics**: LLM token consumption (input/output), API latency per subagent.
-* **Jev Triage Statistics**: Total findings evaluated, accepted count, duplicate rejections, borderline issues routed to human triage, suppressed noise count.
+* **Jev Triage Statistics**: Total findings evaluated, accepted count, duplicate rejections, borderline issues routed to human triage, issues verified & closed, PR review comments posted, suppressed noise count.
 
-### 6.2 Report 2: Tickets Report (`2_tickets-report.md` & `.json`)
-A comprehensive status ledger of all actions taken against GitHub:
+### 6.2 Report 2: Tickets & PR Review Report (`2_tickets-report.md` & `.json`)
+A comprehensive status ledger of all actions taken against GitHub Issues and Pull Requests:
 * **Created Issues Table**: Issue #, title, category, Jev urgency score, target project column link.
-* **Updated Issues Table**: Existing issues appended with new findings.
-* **Skipped / Duplicate Findings**: Findings suppressed by Jev `Noul` with references to the existing open issues they matched.
+* **Closed Issues Table**: Issue #, title, resolution summary, fixing commit SHA(s), Jev resolution confidence ($P$), and closure timestamp.
+* **Updated Issues Table**: Existing issues appended with new findings or partial fix notes.
+* **PR Review Actions Table**: PR #, review verdict, inline comments posted (file & line), existing review threads audited/resolved, and suppressed duplicate comments.
+* **Skipped / Duplicate Findings**: Findings suppressed by Jev `Noul` with references to the existing open issues or PR threads they matched.
 
 ### 6.3 Report 3: Security Report (`3_security-report.md`)
 A dedicated security briefing for tech leads and security teams:
@@ -184,8 +230,9 @@ A dedicated assessment of the automated test suite across Unit, Integration, and
 
 ---
 
-## 7. Issue Formatting & Metadata Signature
+## 7. Issue, Resolution & PR Comment Formatting
 
+### 7.1 New Issue Formatting & Metadata Signature
 Every issue created embeds structured metadata in an HTML comment for deterministic parsing, accompanied by curated research and learning references (official framework documentation, Stack Overflow discussions, and architectural articles) to accelerate developer remediation:
 
 ```markdown
@@ -215,6 +262,57 @@ jev_score: 4
 jev_confidence: 0.92
 agent: SecurityAuditor
 created_at: 2026-10-13T15:00:00Z
+-->
+```
+
+### 7.2 Automated Issue Closure Comment Format
+When an open issue is verified as completed by the Issue Resolution Agent and Jev `Noul` ($P \ge 0.90$), GitGavel posts a structured explanation comment before closing the issue as `completed`:
+
+```markdown
+## ✅ Issue Resolved
+
+GitGavel verified that this issue has been completed in the codebase and is automatically closing it.
+
+### 🛠️ How It Was Fixed
+[Concise explanation of the code changes, architectural update, or tests added that resolved the issue]
+
+### 🔗 Resolving Commits
+- `cfad09a` — *fix(tests): isolate CI environment variables in GitService fallback test*
+- `ebddfb3` — *ci: support both GEMINI_API_KEY and AI_API_KEY secrets in audit workflow*
+
+---
+<!-- gitgavel-resolution
+resolved_by_commits: ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36", "ebddfb3f70be02a6ec8e489155c96f78071104a3"]
+jev_resolution_confidence: 0.96
+agent: IssueResolutionAuditor
+closed_at: 2026-10-20T14:15:00Z
+-->
+```
+
+### 7.3 Pull Request Review & Comment Format
+When auditing a Pull Request, GitGavel posts inline review comments on affected diff lines and a top-level PR review summary comment:
+
+```markdown
+## ⚖️ GitGavel Pull Request Audit Summary
+
+| Domain | Findings | Inline Comments | Prior Threads Resolved |
+| :--- | :---: | :---: | :---: |
+| 🛡️ Security | 0 | 0 | 1 / 1 |
+| 📋 Spec Alignment | 1 | 1 | — |
+| ⚙️ Architecture | 0 | 0 | — |
+| 🧪 Test Coverage | 1 | 1 | 2 / 2 |
+
+### 🔍 Key Observations & Existing Review Audit
+- **Resolved Review Threads**: Confirmed that previous review feedback on `GitService.cs` (env var isolation) was addressed in commit `cfad09a`.
+- **Open Action Items**: Added 2 inline comments on the diff regarding missing boundary tests and spec configuration alignment.
+
+---
+<!-- gitgavel-pr-review
+pr_number: 42
+head_sha: cfad09afc6f436fb3af957ff2d94eba2d3e1ea36
+inline_comments_posted: 2
+agent: PrReviewAuditor
+reviewed_at: 2026-10-20T14:15:00Z
 -->
 ```
 
@@ -255,6 +353,21 @@ subagents:
     provider: "gemini"
     model: "gemini-2.5-pro"
     tiers: ["unit", "integration", "e2e"]
+  prReview:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-pro"
+    auditExistingReviews: true        # Audit existing PR review threads & comments
+    postInlineComments: true          # Post line-level comments on PR diffs
+    postSummaryComment: true          # Post overall PR review summary comment
+    maxInlineCommentsPerPr: 10
+  issueResolution:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-flash"
+    autoCloseCompleted: true          # Automatically close issues verified as fixed
+    commitLookbackCount: 50           # Number of recent git commits to inspect for fixes
+    includeCommitLinks: true          # Cite resolving commit SHAs & explanation in closing comment
 
 # System 1 Triage Gatekeeper (Jev Decision Engine)
 triage:
@@ -262,15 +375,16 @@ triage:
   jev:
     apiKeyEnv: "JEV_API_KEY"
     thresholds:
-      autoBacklogConfidence: 0.85   # > 0.85 -> Backlog
-      humanReviewConfidence: 0.50   # 0.50 - 0.85 -> AI Triage
+      autoBacklogConfidence: 0.85     # > 0.85 -> Backlog
+      humanReviewConfidence: 0.50     # 0.50 - 0.85 -> AI Triage
+      autoCloseIssueConfidence: 0.90  # >= 0.90 -> Verify fix, post commit summary & close issue
     dedupeWithNoul: true
-  maxIssuesPerRun: 4                # Safety cap per audit run
+  maxIssuesPerRun: 4                  # Safety cap per audit run
 
 # Developer Reporting Engine
 reporting:
   outputDir: "./reports"
-  githubStepSummary: true           # Writes overview directly to GitHub Actions UI
+  githubStepSummary: true             # Writes overview directly to GitHub Actions UI
   formats: ["markdown", "json"]
   reports:
     auditRun: true
@@ -279,16 +393,23 @@ reporting:
     codeQuality: true
     testQuality: true
 
-# GitHub Projects (v2) Integration
+# GitHub Projects (v2), Issues & PR Integration
 github:
   labels:
     - "ai-backlog"
+  pullRequests:
+    enabled: true
+    defaultReviewEvent: "COMMENT"     # options: "COMMENT" | "REQUEST_CHANGES" | "APPROVE"
+  issueClosure:
+    enabled: true
+    stateReason: "completed"
   projectsV2:
     enabled: true
     projectNumber: 2
     columns:
       backlog: "Backlog"
       humanReview: "AI Triage"
+      done: "Done"                    # Target column when issues are auto-closed as completed
       discard: "Discarded"
     fields:
       priority: "Priority" # Maps Jev Score (1-5) to Project Priority
@@ -330,14 +451,19 @@ ENTRYPOINT ["gitgavel"]
 
 ### 9.2 GitHub Action Workflow with Reports Upload (`action.yml`)
 ```yaml
-name: "Weekly AI Backlog Audit"
+name: "GitGavel AI Repo & PR Audit"
 on:
   schedule:
     - cron: '0 3 * * 1'
+  pull_request:
+    types: [opened, synchronize, reopened]
+  pull_request_review:
+    types: [submitted]
   workflow_dispatch:
 
 permissions:
   issues: write
+  pull-requests: write
   contents: read
   repository-projects: write
 
@@ -346,6 +472,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Full history enabled for commit-to-issue resolution tracking
 
       - name: Run GitGavel
         uses: docker://ghcr.io/tyronebramwell/gitgavel:latest
@@ -378,3 +506,5 @@ jobs:
 | **Phase 3** | **Developer Reporting Engine** | - Output generators for developer reports (`audit-run`, `tickets-report`, `security-report`, `code-quality-report`)<br>- Markdown and structured JSON export<br>- `$GITHUB_STEP_SUMMARY` integration |
 | **Phase 4** | **GitHub Projects v2 & Packaging** | - Octokit REST client & GraphQL client for Projects v2<br>- Multi-stage Docker image published to GHCR (`ghcr.io/.../gitgavel`)<br>- GitHub Action `action.yml` wrapper and artifact upload workflow |
 | **Phase 5** | **Test Sentinel Subagent** | - Test Sentinel Agent auditing Unit, Integration, and E2E test suites<br>- Detection of untested business logic, missing edge cases, and flakiness<br>- Report 5 (`5_test-quality-report.md`) generation<br>- Automated triage and GitHub backlog sync for test gaps |
+| **Phase 6** | **PR Review Auditing & Commenting** | - PR Review Auditor Agent inspecting PR diffs, commits, and existing PR review threads<br>- Jev `Noul` deduplication against existing PR comments<br>- Automated inline diff review comments and top-level PR summary comments via GitHub Pull Request Reviews API |
+| **Phase 7** | **Automated Issue Resolution & Closure** | - Issue Resolution Agent matching open GitHub issues against codebase state and `git log` history<br>- Jev `Noul` high-confidence completion verification ($P \ge 0.90$)<br>- Automated closing comment explaining how the issue was fixed with resolving commit SHAs, closing the issue as `completed`, and moving Projects v2 status to `Done` |

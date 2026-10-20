@@ -217,4 +217,100 @@ public class GitHubTests
             Environment.SetEnvironmentVariable("GITHUB_TOKEN", prevGithub);
         }
     }
+
+    [Fact]
+    public async Task GitHubService_CloseResolvedIssue_PostsExplanationAndCommitLinksAndMovesToDone()
+    {
+        var mock = new MockGitHubService();
+        var config = new GitGavelConfig();
+
+        var decision = new IssueResolutionDecision
+        {
+            Candidate = new IssueResolutionCandidate
+            {
+                IssueNumber = 101,
+                IssueTitle = "Isolate CI environment variables in GitService fallback test",
+                IsResolved = true,
+                HowItWasFixed = "Isolated GITHUB_SHA, GITHUB_REF_NAME, and GITHUB_REPOSITORY in GitServiceTests.",
+                ResolvingCommitShas = ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"],
+                ResolvingCommitSummaries = ["`cfad09a` — *fix(tests): isolate CI environment variables in GitService fallback test*"]
+            },
+            VerifiedResolved = true,
+            ResolutionProbability = 0.96,
+            Action = IssueResolutionAction.CloseResolved,
+            TargetColumn = "Done",
+            Reason = "Verified fixed"
+        };
+
+        var closed = await mock.CloseResolvedIssueAsync("my-org", "my-repo", decision, config);
+
+        closed.IssueNumber.Should().Be(101);
+        closed.HowItWasFixed.Should().Contain("GITHUB_SHA");
+        closed.ResolvingCommits.Should().ContainSingle(c => c.Contains("cfad09a"));
+
+        mock.ClosedIssues.Should().HaveCount(1);
+        var commentBody = mock.ClosedIssues[0].CommentBody;
+        commentBody.Should().Contain("## ✅ Issue Resolved");
+        commentBody.Should().Contain("### 🛠️ How It Was Fixed");
+        commentBody.Should().Contain("### 🔗 Resolving Commits");
+        commentBody.Should().Contain("`cfad09a`");
+        commentBody.Should().Contain("<!-- gitgavel-resolution");
+
+        var parsedMeta = IssueFormatter.ParseResolutionMetadata(commentBody);
+        parsedMeta.Should().NotBeNull();
+        parsedMeta!.ResolvedByCommits.Should().Contain("cfad09afc6f436fb3af957ff2d94eba2d3e1ea36");
+        parsedMeta.JevResolutionConfidence.Should().Be(0.96);
+
+        mock.ProjectAssignments.Should().ContainSingle(a => a.Issue.IssueNumber == 101 && a.Column == "Done");
+    }
+
+    [Fact]
+    public async Task GitHubService_PostPullRequestReview_FormatsInlineAndSummaryComments()
+    {
+        var mock = new MockGitHubService();
+        var config = new GitGavelConfig();
+
+        var auditResult = new PrReviewAuditResult
+        {
+            PrNumber = 42,
+            HeadSha = "cfad09afc6f436fb3af957ff2d94eba2d3e1ea36",
+            SummaryObservations = "Prior thread resolved; one boundary test recommended.",
+            ResolvedThreadsNotes = ["Verified env var isolation in GitServiceTests.cs"],
+            RecommendedEvent = "COMMENT"
+        };
+
+        var decisions = new List<PrCommentTriageDecision>
+        {
+            new()
+            {
+                Candidate = new PrReviewCommentCandidate
+                {
+                    FilePath = "src/GitGavel/Git/GitService.cs",
+                    Line = 70,
+                    Category = "Testing",
+                    Severity = "Medium",
+                    Title = "Add boundary test",
+                    Body = "Cover maxCount <= 0.",
+                    SuggestedCode = "if (maxCount <= 0) return [];"
+                },
+                JevScore = 3.2,
+                PriorityLabel = "P2",
+                Action = PrCommentAction.PostInlineReview,
+                Confidence = 0.92
+            }
+        };
+
+        var posted = await mock.PostPullRequestReviewAsync("my-org", "my-repo", 42, auditResult, decisions, config);
+
+        posted.PrNumber.Should().Be(42);
+        posted.InlineCommentsPosted.Should().Be(1);
+        posted.SummaryPosted.Should().BeTrue();
+        posted.Verdict.Should().Be("COMMENT");
+
+        mock.PostedPrReviews.Should().HaveCount(1);
+        mock.PostedPrReviews[0].SummaryBody.Should().Contain("## ⚖️ GitGavel Pull Request Audit Summary");
+        mock.PostedPrReviews[0].SummaryBody.Should().Contain("Verified env var isolation in GitServiceTests.cs");
+        mock.PostedPrReviews[0].SummaryBody.Should().Contain("<!-- gitgavel-pr-review");
+        mock.PostedPrReviews[0].InlineBodies[0].Should().Contain("```suggestion");
+    }
 }

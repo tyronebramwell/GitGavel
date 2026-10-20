@@ -86,18 +86,22 @@ public class DiscoveryTests
             var docsDir = Path.Combine(tempDir, "docs");
             var srcDir = Path.Combine(tempDir, "src");
             var binDir = Path.Combine(tempDir, "src", "bin");
+            var testsDir = Path.Combine(tempDir, "tests");
             Directory.CreateDirectory(docsDir);
             Directory.CreateDirectory(srcDir);
             Directory.CreateDirectory(binDir);
+            Directory.CreateDirectory(testsDir);
 
             await File.WriteAllTextAsync(Path.Combine(docsDir, "spec.md"), "# API Spec");
             await File.WriteAllTextAsync(Path.Combine(srcDir, "App.cs"), "public class App {}");
             await File.WriteAllTextAsync(Path.Combine(binDir, "Ignored.cs"), "public class Ignored {}");
+            await File.WriteAllTextAsync(Path.Combine(testsDir, "AppTests.cs"), "public class AppTests {}");
 
             var config = new GitGavelConfig();
             config.Scope.Specs.Include = ["docs/**/*.md"];
             config.Scope.Source.Include = ["src/**/*.cs"];
             config.Scope.Source.Exclude = ["**/bin/**"];
+            config.Scope.Tests.Include = ["tests/**/*.cs"];
 
             var scanner = new FileScanner();
             var context = await scanner.ScanAsync(tempDir, config);
@@ -108,6 +112,10 @@ public class DiscoveryTests
             context.SourceFiles.Should().HaveCount(1);
             context.SourceFiles[0].RelativePath.Should().Contain("App.cs");
             context.SourceFiles.Should().NotContain(f => f.RelativePath.Contains("bin"));
+
+            context.TestFiles.Should().HaveCount(1);
+            context.TestFiles[0].RelativePath.Should().Contain("AppTests.cs");
+            context.TestFiles[0].IsTest.Should().BeTrue();
         }
         finally
         {

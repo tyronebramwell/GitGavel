@@ -167,4 +167,99 @@ public class System1Tests
         decisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog).Should().Be(2);
         decisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview).Should().Be(1);
     }
+
+    [Fact]
+    public async Task JevEngine_VerifyIssueResolutions_WhenNoulHighConfidence_ClosesResolvedIssue()
+    {
+        var mockJev = new Mock<IJevClient>();
+        var verifyResp = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["is_issue_resolved"] = new NoulAnswer { Noul = 0.96 }
+            }
+        };
+
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.Is<IReadOnlyDictionary<string, Question>>(q => q.ContainsKey("is_issue_resolved")),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(verifyResp);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var candidates = new List<IssueResolutionCandidate>
+        {
+            new()
+            {
+                IssueNumber = 101,
+                IssueTitle = "Fix GitService fallback test",
+                IsResolved = true,
+                HowItWasFixed = "Isolated CI env vars in GitServiceTests",
+                ResolvingCommitShas = ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"]
+            }
+        };
+
+        var openIssues = new List<ExistingIssue>
+        {
+            new(101, "Fix GitService fallback test", "Description", "open")
+        };
+
+        var decisions = await engine.VerifyIssueResolutionsAsync(candidates, openIssues, _config);
+
+        decisions.Should().HaveCount(1);
+        decisions[0].VerifiedResolved.Should().BeTrue();
+        decisions[0].ResolutionProbability.Should().Be(0.96);
+        decisions[0].Action.Should().Be(IssueResolutionAction.CloseResolved);
+        decisions[0].TargetColumn.Should().Be("Done");
+    }
+
+    [Fact]
+    public async Task JevEngine_TriagePrReviewComments_SuppressesDuplicateAndScoresNovel()
+    {
+        var mockJev = new Mock<IJevClient>();
+
+        var dedupeResp = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["is_duplicate_comment"] = new NoulAnswer { Noul = 0.92 }
+            }
+        };
+
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.Is<IReadOnlyDictionary<string, Question>>(q => q.ContainsKey("is_duplicate_comment")),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(dedupeResp);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var candidates = new List<PrReviewCommentCandidate>
+        {
+            new()
+            {
+                FilePath = "src/App.cs",
+                Line = 25,
+                Category = "Security",
+                Severity = "High",
+                Title = "Missing null check",
+                Body = "Check for null input."
+            }
+        };
+
+        var existingComments = new List<ExistingPrReviewComment>
+        {
+            new(555, "src/App.cs", 25, "Missing null check here", "reviewer", DateTime.UtcNow)
+        };
+
+        var decisions = await engine.TriagePrReviewCommentsAsync(candidates, existingComments, _config);
+
+        decisions.Should().HaveCount(1);
+        decisions[0].IsDuplicate.Should().BeTrue();
+        decisions[0].DuplicateOfCommentId.Should().Be(555);
+        decisions[0].Action.Should().Be(PrCommentAction.Discard);
+    }
 }

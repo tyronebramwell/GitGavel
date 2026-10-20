@@ -67,6 +67,11 @@ public static class ConfigLoader
         {
             throw new InvalidOperationException("triage.jev.thresholds.humanReviewConfidence cannot be greater than autoBacklogConfidence.");
         }
+
+        if (thresholds.AutoCloseIssueConfidence is < 0 or > 1.0)
+        {
+            throw new InvalidOperationException("triage.jev.thresholds.autoCloseIssueConfidence must be between 0.0 and 1.0.");
+        }
     }
 
     public static string? ResolveEnv(string envVarName)
