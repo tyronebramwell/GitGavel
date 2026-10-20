@@ -69,13 +69,6 @@ public class SubagentsConfig
         Tiers = ["unit", "integration", "e2e"]
     };
 
-    public PrReviewSubagentSettings PrReview { get; set; } = new()
-    {
-        Enabled = true,
-        Provider = "gemini",
-        Model = "gemini-2.5-pro"
-    };
-
     public IssueResolutionSubagentSettings IssueResolution { get; set; } = new()
     {
         Enabled = true,
@@ -99,14 +92,6 @@ public class SecuritySubagentSettings : SubagentSettings
 public class TestsSubagentSettings : SubagentSettings
 {
     public List<string> Tiers { get; set; } = ["unit", "integration", "e2e"];
-}
-
-public class PrReviewSubagentSettings : SubagentSettings
-{
-    public bool AuditExistingReviews { get; set; } = true;
-    public bool PostInlineComments { get; set; } = true;
-    public bool PostSummaryComment { get; set; } = true;
-    public int MaxInlineCommentsPerPr { get; set; } = 10;
 }
 
 public class IssueResolutionSubagentSettings : SubagentSettings
@@ -167,6 +152,11 @@ public class GitHubConfig
 public class PullRequestsConfig
 {
     public bool Enabled { get; set; } = true;
+    public bool OnlyChangedFiles { get; set; } = true;
+    public bool AuditExistingReviews { get; set; } = true;
+    public bool PostInlineComments { get; set; } = true;
+    public bool PostSummaryComment { get; set; } = true;
+    public int MaxInlineCommentsPerPr { get; set; } = 10;
     public string DefaultReviewEvent { get; set; } = "COMMENT"; // "COMMENT" | "REQUEST_CHANGES" | "APPROVE"
 }
 

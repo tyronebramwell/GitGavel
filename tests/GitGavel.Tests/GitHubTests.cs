@@ -270,28 +270,38 @@ public class GitHubTests
         var mock = new MockGitHubService();
         var config = new GitGavelConfig();
 
-        var auditResult = new PrReviewAuditResult
+        var prContext = new PullRequestContext
         {
             PrNumber = 42,
+            Title = "Update GitService",
+            BaseRef = "main",
+            HeadRef = "feature/pr-42",
             HeadSha = "cfad09afc6f436fb3af957ff2d94eba2d3e1ea36",
-            SummaryObservations = "Prior thread resolved; one boundary test recommended.",
-            ResolvedThreadsNotes = ["Verified env var isolation in GitServiceTests.cs"],
-            RecommendedEvent = "COMMENT"
+            ChangedFiles =
+            [
+                new PullRequestChangedFile("src/GitGavel/Git/GitService.cs", "modified", 12, 2, "@@ -65,2 +65,12 @@")
+            ],
+            ExistingReviewComments =
+            [
+                new ExistingPrReviewComment(10, "tests/GitGavel.Tests/GitServiceTests.cs", 20, "Verified env var isolation in GitServiceTests.cs", "maintainer", DateTime.UtcNow)
+            ]
         };
 
         var decisions = new List<PrCommentTriageDecision>
         {
             new()
             {
-                Candidate = new PrReviewCommentCandidate
+                Finding = new FindingCandidate
                 {
                     FilePath = "src/GitGavel/Git/GitService.cs",
-                    Line = 70,
+                    StartLine = 70,
+                    EndLine = 74,
                     Category = "Testing",
                     Severity = "Medium",
                     Title = "Add boundary test",
-                    Body = "Cover maxCount <= 0.",
-                    SuggestedCode = "if (maxCount <= 0) return [];"
+                    Summary = "Cover maxCount <= 0.",
+                    AgentName = "TestSentinelAgent",
+                    SuggestedRemediation = "if (maxCount <= 0) return [];"
                 },
                 JevScore = 3.2,
                 PriorityLabel = "P2",
@@ -300,7 +310,7 @@ public class GitHubTests
             }
         };
 
-        var posted = await mock.PostPullRequestReviewAsync("my-org", "my-repo", 42, auditResult, decisions, config);
+        var posted = await mock.PostPullRequestReviewAsync("my-org", "my-repo", prContext, decisions, config);
 
         posted.PrNumber.Should().Be(42);
         posted.InlineCommentsPosted.Should().Be(1);
@@ -309,7 +319,7 @@ public class GitHubTests
 
         mock.PostedPrReviews.Should().HaveCount(1);
         mock.PostedPrReviews[0].SummaryBody.Should().Contain("## ⚖️ GitGavel Pull Request Audit Summary");
-        mock.PostedPrReviews[0].SummaryBody.Should().Contain("Verified env var isolation in GitServiceTests.cs");
+        mock.PostedPrReviews[0].SummaryBody.Should().Contain("Changed Files Audited");
         mock.PostedPrReviews[0].SummaryBody.Should().Contain("<!-- gitgavel-pr-review");
         mock.PostedPrReviews[0].InlineBodies[0].Should().Contain("```suggestion");
     }

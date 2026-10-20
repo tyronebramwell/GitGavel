@@ -73,34 +73,6 @@ public record PullRequestContext
     public List<ExistingPrReviewSummary> ExistingReviews { get; init; } = [];
 }
 
-public record PrReviewCommentCandidate
-{
-    public string Id { get; init; } = Guid.NewGuid().ToString("N");
-    public required string FilePath { get; init; }
-    public int Line { get; init; } = 1;
-    public required string Category { get; init; } // Security, SpecDrift, Refactoring, Testing
-    public required string Severity { get; init; } // Critical, High, Medium, Low
-    public required string Title { get; init; }
-    public required string Body { get; init; }
-    public string? SuggestedCode { get; init; }
-}
-
-public record PrReviewAuditResult
-{
-    public int PrNumber { get; init; }
-    public string HeadSha { get; init; } = "";
-    public string SummaryObservations { get; init; } = "";
-    public List<string> ResolvedThreadsNotes { get; init; } = [];
-    public List<PrReviewCommentCandidate> InlineComments { get; init; } = [];
-    public string RecommendedEvent { get; init; } = "COMMENT"; // COMMENT, REQUEST_CHANGES, APPROVE
-    public int PromptTokens { get; init; }
-    public int CompletionTokens { get; init; }
-    public int TotalTokens => PromptTokens + CompletionTokens;
-    public long DurationMs { get; init; }
-    public bool IsSuccess { get; init; } = true;
-    public string? ErrorMessage { get; init; }
-}
-
 public record IssueResolutionCandidate
 {
     public required int IssueNumber { get; init; }

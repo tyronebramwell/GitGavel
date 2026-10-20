@@ -64,8 +64,7 @@ public interface IGitHubService
     Task<PostedPrReviewResult> PostPullRequestReviewAsync(
         string owner,
         string repo,
-        int prNumber,
-        PrReviewAuditResult auditResult,
+        PullRequestContext prContext,
         IReadOnlyList<PrCommentTriageDecision> decisions,
         GitGavelConfig config,
         CancellationToken ct = default);

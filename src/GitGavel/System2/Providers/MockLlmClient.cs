@@ -93,29 +93,6 @@ public class MockLlmClient : ILlmClient
             ]
             """;
         }
-        else if (p.StartsWith("You are the PR Review Auditor Agent", StringComparison.OrdinalIgnoreCase))
-        {
-            sampleJson = """
-            {
-              "summaryObservations": "Audited PR diff and existing review threads. Prior feedback on environment variable isolation was resolved; identified one missing boundary assertion in the updated service.",
-              "recommendedEvent": "COMMENT",
-              "resolvedThreadsNotes": [
-                "Confirmed that prior review thread regarding CI environment variable isolation in GitServiceTests.cs was resolved."
-              ],
-              "inlineComments": [
-                {
-                  "filePath": "src/GitGavel/Git/GitService.cs",
-                  "line": 75,
-                  "category": "Testing",
-                  "severity": "Medium",
-                  "title": "Add boundary test for negative commit lookback count",
-                  "body": "Ensure `GetRecentCommits` is covered by a unit test when `maxCount <= 0`.",
-                  "suggestedCode": "if (maxCount <= 0) return Array.Empty<GitCommitRecord>();"
-                }
-              ]
-            }
-            """;
-        }
         else if (p.StartsWith("You are the Issue Resolution Agent", StringComparison.OrdinalIgnoreCase))
         {
             sampleJson = """

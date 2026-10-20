@@ -26,6 +26,10 @@ public class RefactoringAgent : ISubagent
         var promptBuilder = new StringBuilder();
         promptBuilder.AppendLine("You are the Architecture & Refactoring Agent. Flag real architectural debt, tight coupling across architectural boundaries, large code duplication, and severe maintainability issues.");
         promptBuilder.AppendLine("NOTE: Focus only on high-confidence, actionable architectural debt and anti-patterns. The project uses lightweight multi-language heuristics, standard DI defaults, and modular command patterns by architectural design; do not flag these intentional design decisions as architectural debt.");
+        if (context.IsPullRequestMode && context.ActivePullRequest != null)
+        {
+            promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+        }
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
@@ -57,6 +61,11 @@ public class RefactoringAgent : ISubagent
         foreach (var src in prioritizedFiles)
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
+            if (!string.IsNullOrWhiteSpace(src.DiffPatch))
+            {
+                promptBuilder.AppendLine("PR Diff Patch:");
+                promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
+            }
             promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
         }
 

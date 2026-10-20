@@ -55,14 +55,6 @@ subagents:
     - unit
     - integration
     - e2e
-  prReview:
-    enabled: true
-    provider: gemini
-    model: gemini-2.5-flash
-    auditExistingReviews: true
-    postInlineComments: true
-    postSummaryComment: true
-    maxInlineCommentsPerPr: 10
   issueResolution:
     enabled: true
     provider: gemini
@@ -97,6 +89,11 @@ github:
   - ai-backlog
   pullRequests:
     enabled: true
+    onlyChangedFiles: true
+    auditExistingReviews: true
+    postInlineComments: true
+    postSummaryComment: true
+    maxInlineCommentsPerPr: 10
     defaultReviewEvent: COMMENT
   issueClosure:
     enabled: true

@@ -33,6 +33,10 @@ public class SpecDriftAgent : ISubagent
         var promptBuilder = new StringBuilder();
         promptBuilder.AppendLine("You are the Spec Drift Agent. Compare the repository specifications/documentation against the actual source code implementation.");
         promptBuilder.AppendLine("Identify any missing endpoints, divergent parameters, unimplemented requirements, or schema drift.");
+        if (context.IsPullRequestMode && context.ActivePullRequest != null)
+        {
+            promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+        }
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Specification Documents:");
         foreach (var spec in context.SpecFiles.Take(5))
@@ -58,6 +62,11 @@ public class SpecDriftAgent : ISubagent
         foreach (var src in context.SourceFiles)
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
+            if (!string.IsNullOrWhiteSpace(src.DiffPatch))
+            {
+                promptBuilder.AppendLine("PR Diff Patch:");
+                promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
+            }
             promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
         }
 

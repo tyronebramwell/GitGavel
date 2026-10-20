@@ -23,6 +23,10 @@ public class SecurityAuditorAgent : ISubagent
         var promptBuilder = new StringBuilder();
         promptBuilder.AppendLine("You are the Security Auditor Agent. Audit the repository for security vulnerabilities, credential leaks, injection flaws, and authorization defects.");
         promptBuilder.AppendLine("For each vulnerability found, provide OWASP classification, attack vector, and verified secure remediation snippet.");
+        if (context.IsPullRequestMode && context.ActivePullRequest != null)
+        {
+            promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+        }
 
         if (context.SarifFindings.Count > 0)
         {
@@ -39,6 +43,11 @@ public class SecurityAuditorAgent : ISubagent
         foreach (var src in context.SourceFiles.Take(12))
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
+            if (!string.IsNullOrWhiteSpace(src.DiffPatch))
+            {
+                promptBuilder.AppendLine("PR Diff Patch:");
+                promptBuilder.AppendLine(src.DiffPatch.Length > 3000 ? src.DiffPatch[..3000] + "\n...(truncated)" : src.DiffPatch);
+            }
             promptBuilder.AppendLine(src.Content.Length > 3000 ? src.Content[..3000] + "\n...(truncated)" : src.Content);
         }
 

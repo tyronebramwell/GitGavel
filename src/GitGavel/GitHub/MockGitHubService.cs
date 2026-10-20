@@ -104,6 +104,18 @@ public class MockGitHubService : IGitHubService
             ChangedFiles =
             [
                 new PullRequestChangedFile(
+                    FilePath: "src/GitGavel/Commands/AuditCommand.cs",
+                    Status: "modified",
+                    Additions: 32,
+                    Deletions: 8,
+                    Patch: "@@ -57,8 +57,32 @@ public override async Task<int> ExecuteAsync(CommandContext context, AuditSettings settings, CancellationToken cancellationToken)"),
+                new PullRequestChangedFile(
+                    FilePath: "src/GitGavel/Configuration/KeyResolver.cs",
+                    Status: "modified",
+                    Additions: 12,
+                    Deletions: 2,
+                    Patch: "@@ -12,2 +12,12 @@ public static ResolvedKeys Resolve(GitGavelConfig config)"),
+                new PullRequestChangedFile(
                     FilePath: "src/GitGavel/Git/GitService.cs",
                     Status: "modified",
                     Additions: 25,
@@ -137,24 +149,22 @@ public class MockGitHubService : IGitHubService
     public Task<PostedPrReviewResult> PostPullRequestReviewAsync(
         string owner,
         string repo,
-        int prNumber,
-        PrReviewAuditResult auditResult,
+        PullRequestContext prContext,
         IReadOnlyList<PrCommentTriageDecision> decisions,
         GitGavelConfig config,
         CancellationToken ct = default)
     {
-        var inlineDecisions = config.Subagents.PrReview.PostInlineComments
+        var prNumber = prContext.PrNumber;
+        var inlineDecisions = config.Github.PullRequests.PostInlineComments
             ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList()
             : [];
 
         var inlineBodies = inlineDecisions.Select(IssueFormatter.FormatInlinePrComment).ToList();
-        var summaryBody = config.Subagents.PrReview.PostSummaryComment
-            ? IssueFormatter.FormatPrReviewSummary(auditResult, decisions)
+        var summaryBody = config.Github.PullRequests.PostSummaryComment
+            ? IssueFormatter.FormatPrReviewSummary(prContext, decisions)
             : "";
 
-        var verdict = !string.IsNullOrWhiteSpace(auditResult.RecommendedEvent)
-            ? auditResult.RecommendedEvent
-            : config.Github.PullRequests.DefaultReviewEvent;
+        var verdict = config.Github.PullRequests.DefaultReviewEvent;
 
         var revId = ++_nextReviewId;
         var result = new PostedPrReviewResult(

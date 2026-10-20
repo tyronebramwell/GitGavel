@@ -13,15 +13,12 @@ public record OrchestrationResult
 {
     public List<FindingCandidate> AllFindings { get; init; } = [];
     public List<SubagentResult> SubagentResults { get; init; } = [];
-    public PrReviewAuditResult? PrReviewAudit { get; init; }
     public IssueResolutionAgentResult? IssueResolution { get; init; }
     public int TotalPromptTokens =>
         SubagentResults.Sum(s => s.PromptTokens) +
-        (PrReviewAudit?.PromptTokens ?? 0) +
         (IssueResolution?.PromptTokens ?? 0);
     public int TotalCompletionTokens =>
         SubagentResults.Sum(s => s.CompletionTokens) +
-        (PrReviewAudit?.CompletionTokens ?? 0) +
         (IssueResolution?.CompletionTokens ?? 0);
     public int TotalTokens => TotalPromptTokens + TotalCompletionTokens;
     public long TotalDurationMs { get; init; }
@@ -88,17 +85,6 @@ public class SubagentOrchestrator
             SubagentResults = results.ToList(),
             TotalDurationMs = sw.ElapsedMilliseconds
         };
-    }
-
-    public async Task<PrReviewAuditResult> AuditPullRequestAsync(
-        PullRequestContext prContext,
-        RepoContext repoContext,
-        GitGavelConfig config,
-        CancellationToken ct = default)
-    {
-        var client = _clientFactory.CreateClient(config.Subagents.PrReview, config);
-        var agent = new PrReviewAuditorAgent(client, config.Subagents.PrReview.Model);
-        return await agent.AuditPullRequestAsync(prContext, repoContext, config, ct);
     }
 
     public async Task<IssueResolutionAgentResult> EvaluateIssueResolutionsAsync(

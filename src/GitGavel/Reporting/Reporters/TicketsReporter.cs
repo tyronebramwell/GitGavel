@@ -160,9 +160,9 @@ public class TicketsReporter : BaseMarkdownReporter
         sb.AppendLine();
 
         // 6. Pull Request Review Actions (Phase 6)
-        if (ctx.Orchestration.PrReviewAudit != null || ctx.PrCommentDecisions.Count > 0)
+        if (ctx.ActivePullRequestNumber.HasValue || ctx.PrCommentDecisions.Count > 0)
         {
-            var prNum = ctx.ActivePullRequestNumber ?? ctx.Orchestration.PrReviewAudit?.PrNumber ?? 0;
+            var prNum = ctx.ActivePullRequestNumber ?? 0;
             sb.AppendLine($"## 6. Pull Request Review Actions (PR #{prNum})");
             sb.AppendLine();
             if (ctx.PrCommentDecisions.Count == 0)
@@ -176,10 +176,10 @@ public class TicketsReporter : BaseMarkdownReporter
                 for (var i = 0; i < ctx.PrCommentDecisions.Count; i++)
                 {
                     var p = ctx.PrCommentDecisions[i];
-                    var cat = EscapeCell(p.Candidate.Category);
-                    var title = EscapeCell(p.Candidate.Title);
-                    var file = EscapeCell(p.Candidate.FilePath);
-                    sb.AppendLine($"| {i + 1} | **{p.PriorityLabel}** | `{cat}` | `{file}:{p.Candidate.Line}` | {title} | `{p.Action}` | {p.JevScore:F1}/5.0 |");
+                    var cat = EscapeCell(p.Finding.Category);
+                    var title = EscapeCell(p.Finding.Title);
+                    var file = EscapeCell(p.Finding.FilePath);
+                    sb.AppendLine($"| {i + 1} | **{p.PriorityLabel}** | `{cat}` | `{file}:{p.Finding.StartLine}` | {title} | `{p.Action}` | {p.JevScore:F1}/5.0 |");
                 }
             }
             sb.AppendLine();
@@ -263,12 +263,12 @@ public class TicketsReporter : BaseMarkdownReporter
             prReviewComments = ctx.PrCommentDecisions
                 .Select(d => new
                 {
-                    filePath = d.Candidate.FilePath,
-                    line = d.Candidate.Line,
-                    category = d.Candidate.Category,
+                    filePath = d.Finding.FilePath,
+                    line = d.Finding.StartLine,
+                    category = d.Finding.Category,
                     priority = d.PriorityLabel,
-                    title = d.Candidate.Title,
-                    body = d.Candidate.Body,
+                    title = d.Finding.Title,
+                    body = d.Finding.Summary,
                     action = d.Action.ToString(),
                     jevScore = d.JevScore
                 })

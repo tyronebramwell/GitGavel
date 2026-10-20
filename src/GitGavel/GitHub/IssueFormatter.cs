@@ -255,17 +255,17 @@ public static partial class IssueFormatter
 
     public static string FormatInlinePrComment(PrCommentTriageDecision decision)
     {
-        var c = decision.Candidate;
+        var f = decision.Finding;
         var sb = new StringBuilder();
-        sb.AppendLine($"**[{decision.PriorityLabel} | {c.Category}] {c.Title}**");
+        sb.AppendLine($"**[{decision.PriorityLabel} | {f.Category}] {f.Title}**");
         sb.AppendLine();
-        sb.AppendLine(c.Body);
+        sb.AppendLine(f.Summary);
 
-        if (!string.IsNullOrWhiteSpace(c.SuggestedCode))
+        if (!string.IsNullOrWhiteSpace(f.SuggestedRemediation))
         {
             sb.AppendLine();
             sb.AppendLine("```suggestion");
-            sb.AppendLine(c.SuggestedCode);
+            sb.AppendLine(f.SuggestedRemediation);
             sb.AppendLine("```");
         }
 
@@ -273,42 +273,40 @@ public static partial class IssueFormatter
     }
 
     public static string FormatPrReviewSummary(
-        PrReviewAuditResult auditResult,
+        PullRequestContext prContext,
         IReadOnlyList<PrCommentTriageDecision> decisions)
     {
         var sb = new StringBuilder();
         var activeDecisions = decisions.Where(d => d.Action != PrCommentAction.Discard).ToList();
         var inlinePosted = decisions.Count(d => d.Action == PrCommentAction.PostInlineReview);
+        var duplicatesSuppressed = decisions.Count(d => d.IsDuplicate);
 
         int CountDomain(string cat, bool inlineOnly) =>
             (inlineOnly ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview) : activeDecisions)
-            .Count(d => d.Candidate.Category.Equals(cat, StringComparison.OrdinalIgnoreCase));
+            .Count(d => d.Finding.Category.Equals(cat, StringComparison.OrdinalIgnoreCase));
 
         sb.AppendLine("## ⚖️ GitGavel Pull Request Audit Summary");
         sb.AppendLine();
-        sb.AppendLine("| Domain | Findings | Inline Comments | Prior Threads Resolved |");
+        sb.AppendLine("| Domain | Findings | Inline Comments | Prior Threads Deduped |");
         sb.AppendLine("| :--- | :---: | :---: | :---: |");
-        sb.AppendLine($"| 🛡️ Security | {CountDomain("Security", false)} | {CountDomain("Security", true)} | {(auditResult.ResolvedThreadsNotes.Count > 0 ? $"{auditResult.ResolvedThreadsNotes.Count} noted" : "—")} |");
+        sb.AppendLine($"| 🛡️ Security | {CountDomain("Security", false)} | {CountDomain("Security", true)} | {(duplicatesSuppressed > 0 ? $"{duplicatesSuppressed} suppressed" : "—")} |");
         sb.AppendLine($"| 📋 Spec Alignment | {CountDomain("SpecDrift", false)} | {CountDomain("SpecDrift", true)} | — |");
         sb.AppendLine($"| ⚙️ Architecture | {CountDomain("Refactoring", false)} | {CountDomain("Refactoring", true)} | — |");
         sb.AppendLine($"| 🧪 Test Coverage | {CountDomain("Testing", false)} | {CountDomain("Testing", true)} | — |");
         sb.AppendLine();
 
         sb.AppendLine("### 🔍 Key Observations & Existing Review Audit");
-        if (!string.IsNullOrWhiteSpace(auditResult.SummaryObservations))
-        {
-            sb.AppendLine($"- **Overview**: {auditResult.SummaryObservations}");
-        }
+        sb.AppendLine($"- **Changed Files Audited**: Inspected {prContext.ChangedFiles.Count} file(s) modified in PR #{prContext.PrNumber} (`{prContext.HeadRef}` → `{prContext.BaseRef}`).");
 
-        foreach (var note in auditResult.ResolvedThreadsNotes)
+        if (prContext.ExistingReviewComments.Count > 0)
         {
-            sb.AppendLine($"- **Resolved Review Thread**: {note}");
+            sb.AppendLine($"- **Existing Review Threads**: Audited {prContext.ExistingReviewComments.Count} existing review comment(s) ({duplicatesSuppressed} duplicate finding(s) suppressed).");
         }
 
         var summaryOnlyItems = decisions.Where(d => d.Action == PrCommentAction.SummaryCommentOnly).ToList();
         foreach (var item in summaryOnlyItems)
         {
-            sb.AppendLine($"- **[{item.PriorityLabel} | {item.Candidate.Category}] `{item.Candidate.FilePath}:{item.Candidate.Line}` — {item.Candidate.Title}**: {item.Candidate.Body}");
+            sb.AppendLine($"- **[{item.PriorityLabel} | {item.Finding.Category}] `{item.Finding.FilePath}:{item.Finding.StartLine}` — {item.Finding.Title}**: {item.Finding.Summary}");
         }
 
         if (inlinePosted > 0)
@@ -319,10 +317,10 @@ public static partial class IssueFormatter
 
         sb.AppendLine("---");
         sb.AppendLine("<!-- gitgavel-pr-review");
-        sb.AppendLine($"pr_number: {auditResult.PrNumber}");
-        sb.AppendLine($"head_sha: {auditResult.HeadSha}");
+        sb.AppendLine($"pr_number: {prContext.PrNumber}");
+        sb.AppendLine($"head_sha: {prContext.HeadSha}");
         sb.AppendLine($"inline_comments_posted: {inlinePosted}");
-        sb.AppendLine("agent: PrReviewAuditor");
+        sb.AppendLine("agents: [SpecDrift, Security, Refactoring, TestSentinel]");
         sb.AppendLine($"reviewed_at: {DateTime.UtcNow:O}");
         sb.AppendLine("-->");
 

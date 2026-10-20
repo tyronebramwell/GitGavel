@@ -146,6 +146,28 @@ public class GitService : IGitService
             }
         }
 
+        // Fallback: inspect GITHUB_EVENT_PATH JSON payload for pull_request.number
+        var eventPath = Environment.GetEnvironmentVariable("GITHUB_EVENT_PATH");
+        if (!string.IsNullOrWhiteSpace(eventPath) && File.Exists(eventPath))
+        {
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(eventPath));
+                if (doc.RootElement.TryGetProperty("pull_request", out var prElem) &&
+                    prElem.ValueKind == System.Text.Json.JsonValueKind.Object &&
+                    prElem.TryGetProperty("number", out var numProp) &&
+                    numProp.TryGetInt32(out var eventPr) &&
+                    eventPr > 0)
+                {
+                    return eventPr;
+                }
+            }
+            catch
+            {
+                // Ignore malformed event payload
+            }
+        }
+
         return null;
     }
 

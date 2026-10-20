@@ -237,16 +237,19 @@ public class System1Tests
 
         var engine = new TypeSafeJevEngine(mockJev.Object);
 
-        var candidates = new List<PrReviewCommentCandidate>
+        var findings = new List<FindingCandidate>
         {
             new()
             {
                 FilePath = "src/App.cs",
-                Line = 25,
+                StartLine = 25,
+                EndLine = 28,
                 Category = "Security",
                 Severity = "High",
                 Title = "Missing null check",
-                Body = "Check for null input."
+                Summary = "Check for null input.",
+                AgentName = "SecurityAuditor",
+                SuggestedRemediation = "ArgumentNullException.ThrowIfNull(input);"
             }
         };
 
@@ -255,7 +258,7 @@ public class System1Tests
             new(555, "src/App.cs", 25, "Missing null check here", "reviewer", DateTime.UtcNow)
         };
 
-        var decisions = await engine.TriagePrReviewCommentsAsync(candidates, existingComments, _config);
+        var decisions = await engine.TriagePrReviewCommentsAsync(findings, existingComments, _config);
 
         decisions.Should().HaveCount(1);
         decisions[0].IsDuplicate.Should().BeTrue();

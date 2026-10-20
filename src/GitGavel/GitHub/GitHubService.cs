@@ -234,8 +234,7 @@ public class GitHubService : IGitHubService
     public async Task<PostedPrReviewResult> PostPullRequestReviewAsync(
         string owner,
         string repo,
-        int prNumber,
-        PrReviewAuditResult auditResult,
+        PullRequestContext prContext,
         IReadOnlyList<PrCommentTriageDecision> decisions,
         GitGavelConfig config,
         CancellationToken ct = default)
@@ -245,17 +244,16 @@ public class GitHubService : IGitHubService
             throw new InvalidOperationException("GH_TOKEN is required to post Pull Request reviews on GitHub.");
         }
 
-        var inlineDecisions = config.Subagents.PrReview.PostInlineComments
+        var prNumber = prContext.PrNumber;
+        var inlineDecisions = config.Github.PullRequests.PostInlineComments
             ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList()
             : [];
 
-        var summaryBody = config.Subagents.PrReview.PostSummaryComment
-            ? IssueFormatter.FormatPrReviewSummary(auditResult, decisions)
+        var summaryBody = config.Github.PullRequests.PostSummaryComment
+            ? IssueFormatter.FormatPrReviewSummary(prContext, decisions)
             : "GitGavel automated Pull Request audit.";
 
-        var eventStr = !string.IsNullOrWhiteSpace(auditResult.RecommendedEvent)
-            ? auditResult.RecommendedEvent
-            : config.Github.PullRequests.DefaultReviewEvent;
+        var eventStr = config.Github.PullRequests.DefaultReviewEvent;
 
         var reviewEvent = eventStr.ToUpperInvariant() switch
         {
@@ -267,8 +265,8 @@ public class GitHubService : IGitHubService
         var draftComments = inlineDecisions
             .Select(d => new DraftPullRequestReviewComment(
                 IssueFormatter.FormatInlinePrComment(d),
-                d.Candidate.FilePath,
-                Math.Max(1, d.Candidate.Line)))
+                d.Finding.FilePath,
+                Math.Max(1, d.Finding.StartLine)))
             .ToList();
 
         try
@@ -277,7 +275,7 @@ public class GitHubService : IGitHubService
             {
                 Body = summaryBody,
                 Event = reviewEvent,
-                CommitId = string.IsNullOrWhiteSpace(auditResult.HeadSha) ? null : auditResult.HeadSha
+                CommitId = string.IsNullOrWhiteSpace(prContext.HeadSha) ? null : prContext.HeadSha
             };
 
             foreach (var dc in draftComments)

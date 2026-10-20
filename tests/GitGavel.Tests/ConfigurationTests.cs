@@ -72,7 +72,8 @@ public class ConfigurationTests
         config.Triage.MaxIssuesPerRun.Should().Be(4);
         config.Reporting.OutputDir.Should().Be("./reports");
         config.Subagents.Tests.Enabled.Should().BeTrue();
-        config.Subagents.PrReview.Enabled.Should().BeTrue();
+        config.Github.PullRequests.Enabled.Should().BeTrue();
+        config.Github.PullRequests.OnlyChangedFiles.Should().BeTrue();
         config.Subagents.IssueResolution.Enabled.Should().BeTrue();
         config.Triage.Jev.Thresholds.AutoCloseIssueConfidence.Should().Be(0.90);
         config.Reporting.Reports.TestQuality.Should().BeTrue();
@@ -88,10 +89,6 @@ public class ConfigurationTests
           tests:
             enabled: true
             tiers: ["unit", "e2e"]
-          prReview:
-            enabled: true
-            auditExistingReviews: true
-            maxInlineCommentsPerPr: 5
           issueResolution:
             enabled: true
             autoCloseCompleted: true
@@ -103,6 +100,9 @@ public class ConfigurationTests
         github:
           pullRequests:
             enabled: true
+            onlyChangedFiles: true
+            auditExistingReviews: true
+            maxInlineCommentsPerPr: 5
             defaultReviewEvent: "REQUEST_CHANGES"
           issueClosure:
             enabled: true
@@ -115,7 +115,8 @@ public class ConfigurationTests
         var config = ConfigLoader.LoadFromString(yaml);
 
         config.Subagents.Tests.Tiers.Should().BeEquivalentTo(["unit", "e2e"]);
-        config.Subagents.PrReview.MaxInlineCommentsPerPr.Should().Be(5);
+        config.Github.PullRequests.MaxInlineCommentsPerPr.Should().Be(5);
+        config.Github.PullRequests.OnlyChangedFiles.Should().BeTrue();
         config.Subagents.IssueResolution.CommitLookbackCount.Should().Be(25);
         config.Triage.Jev.Thresholds.AutoCloseIssueConfidence.Should().Be(0.92);
         config.Github.PullRequests.DefaultReviewEvent.Should().Be("REQUEST_CHANGES");

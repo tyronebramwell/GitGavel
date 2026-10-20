@@ -104,9 +104,26 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             config = new GitGavelConfig();
         }
 
+        var explicitRepo = settings.Repository ?? config.Github.Repository;
+        var (owner, repo) = _gitService.ResolveRepoCoordinates(repoDir, explicitRepo);
+        var mockGh = new MockGitHubService();
+        if (settings.UseMock)
+        {
+            mockGh.ExistingIssues.Add(new ExistingIssue(
+                Number: 101,
+                Title: "Isolate CI environment variables in GitService fallback test",
+                Body: "GitServiceTests fallback test should clear GITHUB_SHA and GITHUB_REF_NAME.",
+                State: "open",
+                Labels: ["ai-backlog", "testing"]));
+        }
+
+        IGitHubService gitHubService = settings.UseMock || settings.DryRun
+            ? mockGh
+            : new GitHubService();
+
         // 1. File & Context Scanning
         var scanner = new FileScanner(_gitService);
-        RepoContext repoContext;
+        RepoContext repoContext = null!;
 
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
@@ -115,8 +132,25 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
                 repoContext = await scanner.ScanAsync(repoDir, config);
             });
 
-        // Re-obtain context for outside closure
-        repoContext = await scanner.ScanAsync(repoDir, config);
+        PullRequestContext? prContext = null;
+        if (activePrNumber.HasValue && config.Github.PullRequests.Enabled)
+        {
+            await AnsiConsole.Status()
+                .Spinner(Spinner.Known.Dots)
+                .StartAsync($"Fetching Pull Request #{activePrNumber.Value} changed files, unified diffs, and existing review threads...", async ctx =>
+                {
+                    prContext = await gitHubService.GetPullRequestContextAsync(owner, repo, activePrNumber.Value, cancellationToken);
+                });
+
+            if (prContext != null)
+            {
+                repoContext = config.Github.PullRequests.OnlyChangedFiles
+                    ? repoContext.ScopeToPullRequest(prContext)
+                    : (repoContext with { ActivePullRequest = prContext });
+
+                AnsiConsole.MarkupLine($"[bold cyan]🔍 Pull Request Review Mode Active (PR #{prContext.PrNumber}):[/] Scoped audit strictly to [yellow]{prContext.ChangedFiles.Count}[/] changed file(s) (`{Markup.Escape(prContext.HeadRef)}` → `{Markup.Escape(prContext.BaseRef)}`).");
+            }
+        }
 
         var scopeTable = new Table().Border(TableBorder.Rounded);
         scopeTable.AddColumn("[bold]Category[/]");
@@ -124,8 +158,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         scopeTable.AddColumn("[bold]Details[/]");
 
         scopeTable.AddRow("Specification Files", repoContext.SpecFiles.Count.ToString(), string.Join(", ", repoContext.SpecFiles.Select(f => f.RelativePath)));
-        scopeTable.AddRow("Source Files", repoContext.SourceFiles.Count.ToString(), $"{repoContext.TotalLinesOfCode:N0} total LOC");
-        scopeTable.AddRow("Automated Test Files", repoContext.TestFiles.Count.ToString(), $"{repoContext.TotalTestLinesOfCode:N0} test LOC");
+        scopeTable.AddRow("Source Files", repoContext.SourceFiles.Count.ToString(), repoContext.IsPullRequestMode ? $"{repoContext.TotalLinesOfCode:N0} LOC (PR diff-scoped)" : $"{repoContext.TotalLinesOfCode:N0} total LOC");
+        scopeTable.AddRow("Automated Test Files", repoContext.TestFiles.Count.ToString(), repoContext.IsPullRequestMode ? $"{repoContext.TotalTestLinesOfCode:N0} test LOC (PR diff-scoped)" : $"{repoContext.TotalTestLinesOfCode:N0} test LOC");
         scopeTable.AddRow("Recent Git Commits", repoContext.RecentCommits.Count.ToString(), $"Lookback window: {config.Subagents.IssueResolution.CommitLookbackCount}");
         scopeTable.AddRow("SARIF Findings", repoContext.SarifFindings.Count.ToString(), $"{repoContext.SarifFindings.Count} static security alerts loaded");
 
@@ -195,23 +229,6 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.Write(findingsTable);
         AnsiConsole.WriteLine();
 
-        var explicitRepo = settings.Repository ?? config.Github.Repository;
-        var (owner, repo) = _gitService.ResolveRepoCoordinates(repoDir, explicitRepo);
-        var mockGh = new MockGitHubService();
-        if (settings.UseMock)
-        {
-            mockGh.ExistingIssues.Add(new ExistingIssue(
-                Number: 101,
-                Title: "Isolate CI environment variables in GitService fallback test",
-                Body: "GitServiceTests fallback test should clear GITHUB_SHA and GITHUB_REF_NAME.",
-                State: "open",
-                Labels: ["ai-backlog", "testing"]));
-        }
-
-        IGitHubService gitHubService = settings.UseMock || settings.DryRun
-            ? mockGh
-            : new GitHubService();
-
         List<ExistingIssue> existingIssues = [];
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
@@ -227,12 +244,22 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             : new TypeSafeJevEngine(jevApiKey);
 
         List<TriageDecision> triageDecisions = null!;
+        List<PrCommentTriageDecision> prCommentDecisions = [];
+        PostedPrReviewResult? postedPrReview = null;
 
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots12)
             .StartAsync("Executing System 1 Jev Decision Engine (Noul dedupe, Score calibration, Choice routing)...", async ctx =>
             {
                 triageDecisions = await triageEngine.TriageAllAsync(orchestrationResult.AllFindings, existingIssues, config, cancellationToken);
+                if (repoContext.IsPullRequestMode && prContext != null)
+                {
+                    prCommentDecisions = await triageEngine.TriagePrReviewCommentsAsync(
+                        orchestrationResult.AllFindings,
+                        prContext.ExistingReviewComments,
+                        config,
+                        cancellationToken);
+                }
             });
 
         AnsiConsole.MarkupLine("[bold cyan]⚖️ Jev Decision Engine Triage Results[/]\n");
@@ -286,51 +313,87 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         AnsiConsole.MarkupLine($"[bold]Triage Summary:[/] [green]{acceptedCount} Accepted to Backlog[/] | [cyan]{reviewCount} Routed to Review[/] | [yellow]{dupCount} Duplicates Suppressed[/] | [grey]{noiseCount} Discarded[/]\n");
 
-        // 4. GitHub Issue & Projects v2 Publishing
-        var actionable = triageDecisions
-            .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview)
-            .ToList();
-
-        if (actionable.Count > 0)
+        // 4. GitHub Publishing (PR Review Mode vs Standard Repository Backlog Mode)
+        if (repoContext.IsPullRequestMode && prContext != null)
         {
+            var inlineCount = prCommentDecisions.Count(d => d.Action == PrCommentAction.PostInlineReview);
+            var dupPrCount = prCommentDecisions.Count(d => d.IsDuplicate);
+            AnsiConsole.MarkupLine($"[bold cyan]🔍 Pull Request #{prContext.PrNumber} Review Triage:[/] [green]{inlineCount} inline diff comment(s)[/] | [yellow]{dupPrCount} duplicate thread(s) suppressed[/]");
+
             if (settings.DryRun)
             {
-                AnsiConsole.MarkupLine("[bold yellow]⚡ Dry Run Mode:[/] Skipping GitHub issue creation and Project v2 column mutations.\n");
+                AnsiConsole.MarkupLine("[bold yellow]⚡ Dry Run Mode:[/] Skipping GitHub Pull Request review submission.\n");
             }
-            else if (owner == "local-owner")
+            else if (!settings.UseMock && owner == "local-owner")
             {
-                AnsiConsole.MarkupLine("[bold yellow]⚠ Skipping GitHub Publishing:[/] No remote repository configured (resolved to placeholder 'local-owner/GitGavel').");
-                AnsiConsole.MarkupLine("  [grey]To publish issues to GitHub, specify a repository via [cyan]--repo <owner/repo>[/], set [cyan]repository: <owner/repo>[/] under [cyan]github:[/] in .gitgavel.yml, or configure a git remote origin (e.g. `git remote add origin https://github.com/<owner>/<repo>.git`). Run with [cyan]--dry-run[/] to suppress this warning.[/]\n");
+                AnsiConsole.MarkupLine("[bold yellow]⚠ Skipping PR Review Publishing:[/] No remote repository configured.\n");
             }
             else
             {
                 try
                 {
-                    await AnsiConsole.Status()
-                        .Spinner(Spinner.Known.Aesthetic)
-                        .StartAsync($"Publishing {actionable.Count} issues to GitHub ({owner}/{repo}) and updating Projects v2...", async ctx =>
-                        {
-                            foreach (var d in actionable)
-                            {
-                                var created = await gitHubService.CreateOrUpdateIssueAsync(owner, repo, d, config, cancellationToken);
-                                await gitHubService.AssignToProjectV2Async(owner, repo, created, d, config, cancellationToken);
-                            }
-                        });
-                    AnsiConsole.MarkupLine($"[bold green]✓[/] Published [cyan]{actionable.Count}[/] issues to GitHub ([bold]{owner}/{repo}[/]) and synced to Projects v2.\n");
-                }
-                catch (Octokit.NotFoundException)
-                {
-                    AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Repository [bold]{owner}/{repo}[/] was not found on GitHub (404 Not Found).");
-                    AnsiConsole.MarkupLine("  [grey]Please verify that the repository exists on GitHub, your GH_TOKEN has access to it, or run with [cyan]--dry-run[/].[/]\n");
-                }
-                catch (Octokit.AuthorizationException)
-                {
-                    AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Authentication failed (401/403 Unauthorized).");
-                    AnsiConsole.MarkupLine("  [grey]Please verify that your GH_TOKEN has [bold]issues:write[/] and [bold]project:write[/] permissions.[/]\n");
+                    postedPrReview = await gitHubService.PostPullRequestReviewAsync(
+                        owner,
+                        repo,
+                        prContext,
+                        prCommentDecisions,
+                        config,
+                        cancellationToken);
+                    AnsiConsole.MarkupLine($"  [green]✓[/] Posted PR review ([bold]{postedPrReview.Verdict}[/]) to Pull Request #{prContext.PrNumber}.\n");
                 }
                 catch (Exception ex)
                 {
-                    AnsiConsole.MarkupLine($"[bold red]✗ Failed to publish issues to GitHub:[/] {Markup.Escape(ex.Message)}\n");
+                    AnsiConsole.MarkupLine($"  [red]✗ Failed to post PR review on #{prContext.PrNumber}:[/] {Markup.Escape(ex.Message)}\n");
+                }
+            }
+        }
+        else
+        {
+            var actionable = triageDecisions
+                .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview)
+                .ToList();
+
+            if (actionable.Count > 0)
+            {
+                if (settings.DryRun)
+                {
+                    AnsiConsole.MarkupLine("[bold yellow]⚡ Dry Run Mode:[/] Skipping GitHub issue creation and Project v2 column mutations.\n");
+                }
+                else if (owner == "local-owner")
+                {
+                    AnsiConsole.MarkupLine("[bold yellow]⚠ Skipping GitHub Publishing:[/] No remote repository configured (resolved to placeholder 'local-owner/GitGavel').");
+                    AnsiConsole.MarkupLine("  [grey]To publish issues to GitHub, specify a repository via [cyan]--repo <owner/repo>[/], set [cyan]repository: <owner/repo>[/] under [cyan]github:[/] in .gitgavel.yml, or configure a git remote origin (e.g. `git remote add origin https://github.com/<owner>/<repo>.git`). Run with [cyan]--dry-run[/] to suppress this warning.[/]\n");
+                }
+                else
+                {
+                    try
+                    {
+                        await AnsiConsole.Status()
+                            .Spinner(Spinner.Known.Aesthetic)
+                            .StartAsync($"Publishing {actionable.Count} issues to GitHub ({owner}/{repo}) and updating Projects v2...", async ctx =>
+                            {
+                                foreach (var d in actionable)
+                                {
+                                    var created = await gitHubService.CreateOrUpdateIssueAsync(owner, repo, d, config, cancellationToken);
+                                    await gitHubService.AssignToProjectV2Async(owner, repo, created, d, config, cancellationToken);
+                                }
+                            });
+                        AnsiConsole.MarkupLine($"[bold green]✓[/] Published [cyan]{actionable.Count}[/] issues to GitHub ([bold]{owner}/{repo}[/]) and synced to Projects v2.\n");
+                    }
+                    catch (Octokit.NotFoundException)
+                    {
+                        AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Repository [bold]{owner}/{repo}[/] was not found on GitHub (404 Not Found).");
+                        AnsiConsole.MarkupLine("  [grey]Please verify that the repository exists on GitHub, your GH_TOKEN has access to it, or run with [cyan]--dry-run[/].[/]\n");
+                    }
+                    catch (Octokit.AuthorizationException)
+                    {
+                        AnsiConsole.MarkupLine($"[bold red]✗ GitHub API Error:[/] Authentication failed (401/403 Unauthorized).");
+                        AnsiConsole.MarkupLine("  [grey]Please verify that your GH_TOKEN has [bold]issues:write[/] and [bold]project:write[/] permissions.[/]\n");
+                    }
+                    catch (Exception ex)
+                    {
+                        AnsiConsole.MarkupLine($"[bold red]✗ Failed to publish issues to GitHub:[/] {Markup.Escape(ex.Message)}\n");
+                    }
                 }
             }
         }
@@ -376,66 +439,6 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
                     }
                 }
                 AnsiConsole.WriteLine();
-            }
-        }
-
-        // 4c. Phase 6: Pull Request Review Auditing & Automated Commenting
-        List<PrCommentTriageDecision> prCommentDecisions = [];
-        PostedPrReviewResult? postedPrReview = null;
-
-        if (activePrNumber.HasValue && config.Subagents.PrReview.Enabled && config.Github.PullRequests.Enabled)
-        {
-            PullRequestContext? prContext = null;
-            await AnsiConsole.Status()
-                .Spinner(Spinner.Known.Dots)
-                .StartAsync($"Fetching Pull Request #{activePrNumber.Value} diff and existing review threads...", async ctx =>
-                {
-                    prContext = await gitHubService.GetPullRequestContextAsync(owner, repo, activePrNumber.Value, cancellationToken);
-                });
-
-            if (prContext != null)
-            {
-                PrReviewAuditResult prAudit = null!;
-                await AnsiConsole.Status()
-                    .Spinner(Spinner.Known.BouncingBar)
-                    .StartAsync($"Auditing Pull Request #{activePrNumber.Value} reviews and diffs...", async ctx =>
-                    {
-                        prAudit = await orchestrator.AuditPullRequestAsync(prContext, repoContext, config, cancellationToken);
-                        prCommentDecisions = await triageEngine.TriagePrReviewCommentsAsync(
-                            prAudit.InlineComments,
-                            prContext.ExistingReviewComments,
-                            config,
-                            cancellationToken);
-                    });
-
-                orchestrationResult = orchestrationResult with { PrReviewAudit = prAudit };
-
-                var inlineCount = prCommentDecisions.Count(d => d.Action == PrCommentAction.PostInlineReview);
-                AnsiConsole.MarkupLine($"[bold cyan]🔍 Pull Request #{activePrNumber.Value} Audit Complete:[/] [green]{inlineCount} inline comment(s)[/] | [yellow]{prAudit.ResolvedThreadsNotes.Count} resolved thread(s) noted[/]");
-
-                if (!settings.DryRun && (settings.UseMock || owner != "local-owner"))
-                {
-                    try
-                    {
-                        postedPrReview = await gitHubService.PostPullRequestReviewAsync(
-                            owner,
-                            repo,
-                            activePrNumber.Value,
-                            prAudit,
-                            prCommentDecisions,
-                            config,
-                            cancellationToken);
-                        AnsiConsole.MarkupLine($"  [green]✓[/] Posted PR review ([bold]{postedPrReview.Verdict}[/]) to Pull Request #{activePrNumber.Value}.\n");
-                    }
-                    catch (Exception ex)
-                    {
-                        AnsiConsole.MarkupLine($"  [red]✗ Failed to post PR review on #{activePrNumber.Value}:[/] {Markup.Escape(ex.Message)}\n");
-                    }
-                }
-                else
-                {
-                    AnsiConsole.WriteLine();
-                }
             }
         }
 

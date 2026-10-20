@@ -202,10 +202,40 @@ public class System2Tests
     }
 
     [Fact]
-    public async Task PrReviewAuditorAgent_AuditsPrDiffsAndExistingReviews()
+    public async Task SubagentOrchestrator_InPullRequestMode_RunsSameFourSubagentsOnDiffScopedFiles()
     {
-        var mockClient = new MockLlmClient();
-        var agent = new PrReviewAuditorAgent(mockClient);
+        var capturedPrompts = new List<string>();
+        var mockClient = new MockLlmClient(req =>
+        {
+            lock (capturedPrompts)
+            {
+                capturedPrompts.Add(req.Prompt);
+            }
+
+            return new LlmResponse
+            {
+                Content = """
+                [
+                  {
+                    "title": "PR Diff Finding",
+                    "summary": "Issue in modified diff lines",
+                    "category": "Security",
+                    "severity": "High",
+                    "filePath": "src/GitGavel/Git/GitService.cs",
+                    "startLine": 70,
+                    "endLine": 75,
+                    "suggestedRemediation": "if (maxCount <= 0) return [];"
+                  }
+                ]
+                """,
+                PromptTokens = 40,
+                CompletionTokens = 25,
+                DurationMs = 10,
+                ModelUsed = req.Model
+            };
+        });
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
 
         var prContext = new PullRequestContext
         {
@@ -214,30 +244,35 @@ public class System2Tests
             HeadSha = "cfad09afc6f436fb3af957ff2d94eba2d3e1ea36",
             ChangedFiles =
             [
-                new PullRequestChangedFile("src/GitGavel/Git/GitService.cs", "modified", 15, 2, "@@ -10,2 +10,15 @@")
-            ],
-            ExistingReviewComments =
-            [
-                new ExistingPrReviewComment(10, "tests/GitServiceTests.cs", 20, "Isolate CI env vars", "reviewer", DateTime.UtcNow)
+                new PullRequestChangedFile("src/GitGavel/Git/GitService.cs", "modified", 15, 2, "@@ -65,2 +65,15 @@")
             ]
         };
 
-        var repoContext = new RepoContext
+        var fullRepoContext = new RepoContext
         {
             RootDirectory = "/mock",
-            SpecFiles = [],
-            SourceFiles = [],
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 20, 100, "# Spec", true)],
+            SourceFiles =
+            [
+                new ScannedFile("src/GitGavel/Git/GitService.cs", "/mock/src/GitGavel/Git/GitService.cs", 80, 1500, "public class GitService {}", false),
+                new ScannedFile("src/GitGavel/OtherFile.cs", "/mock/src/GitGavel/OtherFile.cs", 50, 900, "public class OtherFile {}", false)
+            ],
+            TestFiles = [],
             SarifFindings = []
         };
 
-        var result = await agent.AuditPullRequestAsync(prContext, repoContext, new GitGavelConfig());
+        var scopedContext = fullRepoContext.ScopeToPullRequest(prContext);
+        var result = await orchestrator.RunAllAsync(scopedContext, new GitGavelConfig());
 
-        result.IsSuccess.Should().BeTrue();
-        result.PrNumber.Should().Be(42);
-        result.ResolvedThreadsNotes.Should().NotBeEmpty();
-        result.InlineComments.Should().HaveCount(1);
-        result.InlineComments[0].FilePath.Should().Be("src/GitGavel/Git/GitService.cs");
-        result.InlineComments[0].SuggestedCode.Should().NotBeNullOrWhiteSpace();
+        result.SubagentResults.Should().HaveCount(4);
+        result.AllFindings.Should().HaveCount(4);
+        capturedPrompts.Should().HaveCount(4);
+        capturedPrompts.Should().AllSatisfy(p =>
+        {
+            p.Should().Contain("PULL REQUEST REVIEW MODE (PR #42");
+            p.Should().Contain("GitService.cs");
+            p.Should().NotContain("OtherFile.cs");
+        });
     }
 
     [Fact]

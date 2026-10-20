@@ -40,7 +40,7 @@ public enum PrCommentAction
 
 public record PrCommentTriageDecision
 {
-    public required PrReviewCommentCandidate Candidate { get; init; }
+    public required FindingCandidate Finding { get; init; }
     public bool IsDuplicate { get; init; }
     public long? DuplicateOfCommentId { get; init; }
     public double DuplicateProbability { get; init; }

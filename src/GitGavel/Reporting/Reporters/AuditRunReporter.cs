@@ -58,13 +58,6 @@ public class AuditRunReporter : BaseMarkdownReporter
             sb.AppendLine($"| **{agent.AgentName}** | {status} | {agent.PromptTokens:N0} | {agent.CompletionTokens:N0} | {agent.TotalTokens:N0} | {agent.DurationMs}ms |");
         }
 
-        if (ctx.Orchestration.PrReviewAudit != null)
-        {
-            var pr = ctx.Orchestration.PrReviewAudit;
-            var status = pr.IsSuccess ? $"{pr.InlineComments.Count} PR comments" : "❌ Error: " + pr.ErrorMessage;
-            sb.AppendLine($"| **PrReviewAuditor** | {status} | {pr.PromptTokens:N0} | {pr.CompletionTokens:N0} | {pr.TotalTokens:N0} | {pr.DurationMs}ms |");
-        }
-
         if (ctx.Orchestration.IssueResolution != null)
         {
             var ir = ctx.Orchestration.IssueResolution;

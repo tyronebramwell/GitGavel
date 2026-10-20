@@ -137,24 +137,26 @@ public class MockTriageEngine : ITriageEngine
     }
 
     public Task<List<PrCommentTriageDecision>> TriagePrReviewCommentsAsync(
-        IReadOnlyList<PrReviewCommentCandidate> candidates,
+        IReadOnlyList<FindingCandidate> findings,
         IReadOnlyList<ExistingPrReviewComment> existingComments,
         GitGavelConfig config,
         CancellationToken ct = default)
     {
         var decisions = new List<PrCommentTriageDecision>();
 
-        foreach (var candidate in candidates)
+        foreach (var finding in findings)
         {
-            var duplicate = existingComments.FirstOrDefault(e =>
-                e.FilePath.Equals(candidate.FilePath, StringComparison.OrdinalIgnoreCase) &&
-                (e.Line == candidate.Line || e.Body.Contains(candidate.Title, StringComparison.OrdinalIgnoreCase)));
+            var duplicate = config.Github.PullRequests.AuditExistingReviews
+                ? existingComments.FirstOrDefault(e =>
+                    e.FilePath.Equals(finding.FilePath, StringComparison.OrdinalIgnoreCase) &&
+                    (e.Line == finding.StartLine || e.Body.Contains(finding.Title, StringComparison.OrdinalIgnoreCase)))
+                : null;
 
             if (duplicate != null)
             {
                 decisions.Add(new PrCommentTriageDecision
                 {
-                    Candidate = candidate,
+                    Finding = finding,
                     IsDuplicate = true,
                     DuplicateOfCommentId = duplicate.Id,
                     DuplicateProbability = 0.93,
@@ -167,7 +169,7 @@ public class MockTriageEngine : ITriageEngine
                 continue;
             }
 
-            var score = candidate.Severity switch
+            var score = finding.Severity switch
             {
                 "Critical" => 5.0,
                 "High" => 4.0,
@@ -180,7 +182,7 @@ public class MockTriageEngine : ITriageEngine
 
             decisions.Add(new PrCommentTriageDecision
             {
-                Candidate = candidate,
+                Finding = finding,
                 IsDuplicate = false,
                 DuplicateProbability = 0.05,
                 JevScore = score,
@@ -191,7 +193,7 @@ public class MockTriageEngine : ITriageEngine
             });
         }
 
-        var maxInline = config.Subagents.PrReview.MaxInlineCommentsPerPr;
+        var maxInline = config.Github.PullRequests.MaxInlineCommentsPerPr;
         var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
         if (maxInline > 0 && inlineAccepted.Count > maxInline)
         {

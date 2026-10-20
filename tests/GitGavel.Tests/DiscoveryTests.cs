@@ -122,4 +122,50 @@ public class DiscoveryTests
             Directory.Delete(tempDir, true);
         }
     }
+
+    [Fact]
+    public void RepoContext_ScopeToPullRequest_FiltersSourceAndTestFilesToPrChangedFiles()
+    {
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/repo/SPECIFICATION.md", 100, 2000, "# Spec", true)],
+            SourceFiles =
+            [
+                new ScannedFile("src/ChangedService.cs", "/mock/repo/src/ChangedService.cs", 50, 1000, "public class ChangedService {}", false),
+                new ScannedFile("src/UnchangedService.cs", "/mock/repo/src/UnchangedService.cs", 80, 1500, "public class UnchangedService {}", false)
+            ],
+            TestFiles =
+            [
+                new ScannedFile("tests/ChangedServiceTests.cs", "/mock/repo/tests/ChangedServiceTests.cs", 30, 600, "public class ChangedServiceTests {}", false, true),
+                new ScannedFile("tests/UnchangedServiceTests.cs", "/mock/repo/tests/UnchangedServiceTests.cs", 40, 800, "public class UnchangedServiceTests {}", false, true)
+            ],
+            SarifFindings =
+            [
+                new SarifFinding("rule-1", "Alert on changed file", "error", "src/ChangedService.cs", 10, 12),
+                new SarifFinding("rule-2", "Alert on unchanged file", "error", "src/UnchangedService.cs", 20, 25)
+            ]
+        };
+
+        var prContext = new GitGavel.System2.Models.PullRequestContext
+        {
+            PrNumber = 42,
+            Title = "Update ChangedService",
+            HeadSha = "abc1234",
+            ChangedFiles =
+            [
+                new GitGavel.System2.Models.PullRequestChangedFile("src/ChangedService.cs", "modified", 10, 2, "@@ -1,5 +1,13 @@"),
+                new GitGavel.System2.Models.PullRequestChangedFile("tests/ChangedServiceTests.cs", "modified", 5, 1, "@@ -1,3 +1,7 @@")
+            ]
+        };
+
+        var scoped = repoContext.ScopeToPullRequest(prContext);
+
+        scoped.IsPullRequestMode.Should().BeTrue();
+        scoped.ActivePullRequest!.PrNumber.Should().Be(42);
+        scoped.SpecFiles.Should().HaveCount(1);
+        scoped.SourceFiles.Should().ContainSingle(f => f.RelativePath == "src/ChangedService.cs" && f.DiffPatch == "@@ -1,5 +1,13 @@");
+        scoped.TestFiles.Should().ContainSingle(f => f.RelativePath == "tests/ChangedServiceTests.cs" && f.DiffPatch == "@@ -1,3 +1,7 @@");
+        scoped.SarifFindings.Should().ContainSingle(s => s.FilePath == "src/ChangedService.cs");
+    }
 }

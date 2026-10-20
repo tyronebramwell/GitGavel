@@ -35,6 +35,10 @@ public class TestSentinelAgent : ISubagent
         var promptBuilder = new StringBuilder();
         promptBuilder.AppendLine("You are the Test Sentinel Agent. Audit the repository's automated testing suite across the test pyramid.");
         promptBuilder.AppendLine($"Target Test Tiers: {string.Join(", ", _tiers)}");
+        if (context.IsPullRequestMode && context.ActivePullRequest != null)
+        {
+            promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+        }
         promptBuilder.AppendLine("Identify:");
         promptBuilder.AppendLine("1. Missing Test Detection (MissingTest): critical production classes, public methods, business rules, or error paths lacking Unit, Integration, or E2E coverage.");
         promptBuilder.AppendLine("2. Extra Scenarios & Boundary Coverage (ExtraScenario): omitted edge cases, boundary conditions, invalid inputs, concurrency/race hazards, and negative assertions.");
@@ -62,6 +66,11 @@ public class TestSentinelAgent : ISubagent
             foreach (var testFile in context.TestFiles.Take(15))
             {
                 promptBuilder.AppendLine($"--- Test File: {testFile.RelativePath} ---");
+                if (!string.IsNullOrWhiteSpace(testFile.DiffPatch))
+                {
+                    promptBuilder.AppendLine("PR Diff Patch:");
+                    promptBuilder.AppendLine(testFile.DiffPatch.Length > 3000 ? testFile.DiffPatch[..3000] + "\n...(truncated)" : testFile.DiffPatch);
+                }
                 promptBuilder.AppendLine(testFile.Content.Length > 4000 ? testFile.Content[..4000] + "\n...(truncated)" : testFile.Content);
             }
         }
@@ -71,6 +80,11 @@ public class TestSentinelAgent : ISubagent
         foreach (var src in context.SourceFiles.Take(12))
         {
             promptBuilder.AppendLine($"--- Source File: {src.RelativePath} ---");
+            if (!string.IsNullOrWhiteSpace(src.DiffPatch))
+            {
+                promptBuilder.AppendLine("PR Diff Patch:");
+                promptBuilder.AppendLine(src.DiffPatch.Length > 3000 ? src.DiffPatch[..3000] + "\n...(truncated)" : src.DiffPatch);
+            }
             promptBuilder.AppendLine(src.Content.Length > 4000 ? src.Content[..4000] + "\n...(truncated)" : src.Content);
         }
 

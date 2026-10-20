@@ -19,7 +19,7 @@ public interface ITriageEngine
         CancellationToken ct = default);
 
     Task<List<PrCommentTriageDecision>> TriagePrReviewCommentsAsync(
-        IReadOnlyList<PrReviewCommentCandidate> candidates,
+        IReadOnlyList<FindingCandidate> findings,
         IReadOnlyList<ExistingPrReviewComment> existingComments,
         GitGavelConfig config,
         CancellationToken ct = default);

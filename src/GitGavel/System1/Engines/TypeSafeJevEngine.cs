@@ -251,7 +251,7 @@ public class TypeSafeJevEngine : ITriageEngine
     }
 
     public async Task<List<PrCommentTriageDecision>> TriagePrReviewCommentsAsync(
-        IReadOnlyList<PrReviewCommentCandidate> candidates,
+        IReadOnlyList<FindingCandidate> findings,
         IReadOnlyList<ExistingPrReviewComment> existingComments,
         GitGavelConfig config,
         CancellationToken ct = default)
@@ -259,12 +259,12 @@ public class TypeSafeJevEngine : ITriageEngine
         var thresholds = config.Triage.Jev.Thresholds;
         var decisions = new List<PrCommentTriageDecision>();
 
-        foreach (var candidate in candidates)
+        foreach (var finding in findings)
         {
             long? dupId = null;
             var maxProb = 0.0;
 
-            if (config.Triage.Jev.DedupeWithNoul && existingComments.Count > 0)
+            if (config.Triage.Jev.DedupeWithNoul && config.Github.PullRequests.AuditExistingReviews && existingComments.Count > 0)
             {
                 foreach (var existing in existingComments)
                 {
@@ -272,10 +272,10 @@ public class TypeSafeJevEngine : ITriageEngine
                     {
                         candidate = new
                         {
-                            filePath = candidate.FilePath,
-                            line = candidate.Line,
-                            title = candidate.Title,
-                            body = candidate.Body
+                            filePath = finding.FilePath,
+                            line = finding.StartLine,
+                            title = finding.Title,
+                            body = finding.Summary
                         },
                         existingComment = new
                         {
@@ -314,7 +314,7 @@ public class TypeSafeJevEngine : ITriageEngine
             {
                 decisions.Add(new PrCommentTriageDecision
                 {
-                    Candidate = candidate,
+                    Finding = finding,
                     IsDuplicate = true,
                     DuplicateOfCommentId = dupId,
                     DuplicateProbability = maxProb,
@@ -331,13 +331,13 @@ public class TypeSafeJevEngine : ITriageEngine
             {
                 comment = new
                 {
-                    filePath = candidate.FilePath,
-                    line = candidate.Line,
-                    category = candidate.Category,
-                    severity = candidate.Severity,
-                    title = candidate.Title,
-                    body = candidate.Body,
-                    suggestedCode = candidate.SuggestedCode
+                    filePath = finding.FilePath,
+                    line = finding.StartLine,
+                    category = finding.Category,
+                    severity = finding.Severity,
+                    title = finding.Title,
+                    body = finding.Summary,
+                    suggestedCode = finding.SuggestedRemediation
                 }
             });
 
@@ -387,7 +387,7 @@ public class TypeSafeJevEngine : ITriageEngine
 
             decisions.Add(new PrCommentTriageDecision
             {
-                Candidate = candidate,
+                Finding = finding,
                 IsDuplicate = false,
                 DuplicateProbability = maxProb,
                 JevScore = calibratedScore,
@@ -399,7 +399,7 @@ public class TypeSafeJevEngine : ITriageEngine
         }
 
         // Enforce MaxInlineCommentsPerPr cap
-        var maxInline = config.Subagents.PrReview.MaxInlineCommentsPerPr;
+        var maxInline = config.Github.PullRequests.MaxInlineCommentsPerPr;
         var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
         if (maxInline > 0 && inlineAccepted.Count > maxInline)
         {
