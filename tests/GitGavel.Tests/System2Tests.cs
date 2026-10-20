@@ -376,4 +376,116 @@ public class System2Tests
         var mock = factory.CreateClient(new SubagentSettings { Provider = "mock" }, config);
         mock.Should().BeOfType<MockLlmClient>();
     }
+
+    [Fact]
+    public async Task System2Agents_IncludeFullSpecAndAllSourceFilesWithoutTruncation()
+    {
+        var capturedPrompts = new List<string>();
+        var mockClient = new MockLlmClient(req =>
+        {
+            lock (capturedPrompts)
+            {
+                capturedPrompts.Add(req.Prompt);
+            }
+
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 50,
+                CompletionTokens = 10,
+                DurationMs = 5,
+                ModelUsed = req.Model
+            };
+        });
+
+        var longSpecContent = new string('A', 6000) + "\n## Section 10: Final Spec Requirement";
+        var sourceFiles = Enumerable.Range(1, 20)
+            .Select(i => new ScannedFile($"src/File{i:D2}.cs", $"/mock/src/File{i:D2}.cs", 25, 300, $"public class Class{i:D2} {{}}", false))
+            .ToList();
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 200, longSpecContent.Length, longSpecContent, true)],
+            SourceFiles = sourceFiles,
+            TestFiles = [new ScannedFile("tests/File20Tests.cs", "/mock/tests/File20Tests.cs", 20, 250, "public class File20Tests {}", false, true)],
+            SarifFindings = []
+        };
+
+        ISubagentOrchestrator orchestrator = new SubagentOrchestrator(mockClient);
+        await orchestrator.RunAllAsync(repoContext, new GitGavelConfig());
+
+        capturedPrompts.Should().HaveCount(4);
+        var specPrompt = capturedPrompts.Single(p => p.Contains("Spec Drift Agent"));
+        specPrompt.Should().Contain("## Section 10: Final Spec Requirement");
+        specPrompt.Should().Contain("src/File20.cs");
+
+        var securityPrompt = capturedPrompts.Single(p => p.Contains("Security Auditor Agent"));
+        securityPrompt.Should().Contain("src/File20.cs");
+
+        var testPrompt = capturedPrompts.Single(p => p.Contains("Test Sentinel Agent"));
+        testPrompt.Should().Contain("src/File20.cs");
+        testPrompt.Should().Contain("tests/File20Tests.cs");
+    }
+
+    [Fact]
+    public async Task IssueResolutionAgent_EvaluatesIssue1EvenWhenMoreThan25OpenIssuesExist()
+    {
+        string? capturedPrompt = null;
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = """
+                [
+                  {
+                    "issueNumber": 1,
+                    "issueTitle": "Missing Implementation of Generative LLM Agents (System 2)",
+                    "isResolved": true,
+                    "howItWasFixed": "Implemented ISubagentOrchestrator, SubagentOrchestrator, and System 2 agents with full repository context visibility.",
+                    "resolvingCommitShas": ["d60cdcf"]
+                  }
+                ]
+                """,
+                PromptTokens = 100,
+                CompletionTokens = 40,
+                DurationMs = 10,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new IssueResolutionAgent(mockClient);
+
+        // Simulate 31 open issues returned newest-first (#31 down to #1)
+        var openIssues = Enumerable.Range(1, 31)
+            .Reverse()
+            .Select(n => new ExistingIssue(
+                Number: n,
+                Title: n == 1 ? "Missing Implementation of Generative LLM Agents (System 2)" : $"Open Issue #{n}",
+                Body: $"Description for issue #{n}",
+                State: "open"))
+            .ToList();
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles =
+            [
+                new ScannedFile("src/GitGavel/Program.cs", "/mock/src/GitGavel/Program.cs", 25, 400, "var app = new CommandApp<AuditCommand>();", false),
+                new ScannedFile("src/GitGavel/System2/SubagentOrchestrator.cs", "/mock/src/GitGavel/System2/SubagentOrchestrator.cs", 100, 2000, "public class SubagentOrchestrator : ISubagentOrchestrator {}", false)
+            ],
+            SarifFindings = []
+        };
+
+        var result = await agent.EvaluateOpenIssuesAsync(openIssues, repoContext);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Candidates.Should().ContainSingle(c => c.IssueNumber == 1 && c.IsResolved);
+        capturedPrompt.Should().NotBeNull();
+        capturedPrompt!.Should().Contain("--- Issue #1: Missing Implementation of Generative LLM Agents (System 2) ---");
+        capturedPrompt.Should().Contain("### Repository Architecture & Symbol Map:");
+        capturedPrompt.Should().Contain("SubagentOrchestrator");
+    }
 }
