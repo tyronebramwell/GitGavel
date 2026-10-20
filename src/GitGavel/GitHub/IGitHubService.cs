@@ -1,4 +1,5 @@
 using GitGavel.Configuration;
+using GitGavel.Reporting;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
 
@@ -67,5 +68,12 @@ public interface IGitHubService
         PullRequestContext prContext,
         IReadOnlyList<PrCommentTriageDecision> decisions,
         GitGavelConfig config,
+        CancellationToken ct = default);
+
+    Task<IReadOnlyList<string>> PostPullRequestDomainReportsAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        ReportContext reportContext,
         CancellationToken ct = default);
 }

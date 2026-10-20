@@ -141,7 +141,9 @@ When GitGavel runs in **Pull Request Review Mode** (automatically triggered on `
 1. **Diff-Only Context Scoping**: GitGavel fetches the Pull Request's changed files, unified diff patches (`@@ -a,b +c,d @@`), and existing PR review comments/threads. It scopes `RepoContext.SourceFiles` and `RepoContext.TestFiles` **exclusively to the files modified in the PR**, attaching each file's unified diff patch so the subagents only inspect lines changed in the PR.
 2. **Same Subagents, Unified Pipeline**: The exact same enabled System 2 subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `RefactoringAgent`, `TestSentinelAgent`) execute in parallel over the PR-scoped context.
 3. **Jev Triage & PR Comment Deduplication**: Candidate findings from all four subagents are evaluated by Jev (`Noul` deduplication against existing PR review comments and open issues, `Score` priority calibration, and `Choice` routing into `PostInlineReview`, `SummaryCommentOnly`, or `Discard`).
-4. **PR Review Publishing**: Instead of creating standalone backlog issues, GitGavel submits a GitHub Pull Request Review containing line-level inline diff comments (with remediation code blocks) and a consolidated PR review summary comment.
+4. **PR Review & Domain Report Publishing**: Instead of creating standalone backlog issues, GitGavel submits:
+   * A GitHub Pull Request Review containing line-level inline diff comments (with remediation code blocks) and a consolidated PR review summary comment.
+   * **Dedicated Domain Report Comments**: For every domain where findings are detected in the PR (`Security`, `SpecDrift` / `Refactoring`, or `Testing`), GitGavel automatically posts that domain's full developer report (`Security Audit Report`, `Code Quality & Spec Report`, or `Test Quality & Coverage Report`) as a dedicated comment on the Pull Request so reviewers can read all findings directly in the PR conversation without digging through CI action artifacts.
 
 ---
 

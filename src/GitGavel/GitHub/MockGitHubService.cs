@@ -1,4 +1,6 @@
 using GitGavel.Configuration;
+using GitGavel.Reporting;
+using GitGavel.Reporting.Reporters;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
 
@@ -12,6 +14,7 @@ public class MockGitHubService : IGitHubService
     public List<(IssueResolutionDecision Decision, ClosedIssueResult Result, string CommentBody)> ClosedIssues { get; } = [];
     public PullRequestContext? MockPullRequest { get; set; }
     public List<(PostedPrReviewResult Result, string SummaryBody, List<string> InlineBodies)> PostedPrReviews { get; } = [];
+    public List<(int PrNumber, string Domain, string ReportMarkdown)> PostedPrDomainReports { get; } = [];
 
     private int _nextIssueNumber = 100;
     private long _nextReviewId = 500;
@@ -178,5 +181,41 @@ public class MockGitHubService : IGitHubService
 
         PostedPrReviews.Add((result, summaryBody, inlineBodies));
         return Task.FromResult(result);
+    }
+
+    public Task<IReadOnlyList<string>> PostPullRequestDomainReportsAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        ReportContext reportContext,
+        CancellationToken ct = default)
+    {
+        var postedDomains = new List<string>();
+        var findings = reportContext.Orchestration.AllFindings;
+
+        if (findings.Any(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase)))
+        {
+            var secBody = SecurityReporter.Generate(reportContext);
+            PostedPrDomainReports.Add((prNumber, "Security", secBody));
+            postedDomains.Add("Security");
+        }
+
+        if (findings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
+                              f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase)))
+        {
+            var qualBody = CodeQualityReporter.Generate(reportContext);
+            PostedPrDomainReports.Add((prNumber, "CodeQuality", qualBody));
+            postedDomains.Add("CodeQuality");
+        }
+
+        if (findings.Any(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
+                              f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
+        {
+            var testBody = TestQualityReporter.Generate(reportContext);
+            PostedPrDomainReports.Add((prNumber, "TestQuality", testBody));
+            postedDomains.Add("TestQuality");
+        }
+
+        return Task.FromResult<IReadOnlyList<string>>(postedDomains);
     }
 }

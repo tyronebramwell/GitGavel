@@ -6,6 +6,7 @@ using GitGavel.System2.Models;
 
 namespace GitGavel.Tests;
 
+[Collection("EnvironmentVariables")]
 public class GitHubTests
 {
     private static TriageDecision CreateDecision(string title, string category, string prio, double score, string column, TriageStatus status)
@@ -322,5 +323,86 @@ public class GitHubTests
         mock.PostedPrReviews[0].SummaryBody.Should().Contain("Changed Files Audited");
         mock.PostedPrReviews[0].SummaryBody.Should().Contain("<!-- gitgavel-pr-review");
         mock.PostedPrReviews[0].InlineBodies[0].Should().Contain("```suggestion");
+    }
+
+    [Fact]
+    public async Task GitHubService_PostPullRequestDomainReports_PostsCommentsForDomainsWithFindings()
+    {
+        var mock = new MockGitHubService();
+        var config = new GitGavelConfig();
+
+        var secFinding = new FindingCandidate
+        {
+            Title = "Path Traversal in Scanner",
+            Summary = "Unvalidated file path read.",
+            Category = "Security",
+            Severity = "High",
+            FilePath = "src/GitGavel/Discovery/FileScanner.cs",
+            StartLine = 30,
+            EndLine = 45,
+            AgentName = "SecurityAuditor",
+            OwaspCategory = "A01: Broken Access Control",
+            SuggestedRemediation = "Validate canonical path."
+        };
+
+        var testFinding = new FindingCandidate
+        {
+            Title = "Missing Unit Test for Diff Position Mapping",
+            Summary = "TryMapFileLineToDiffPosition needs boundary coverage.",
+            Category = "Testing",
+            Severity = "Medium",
+            TestTier = "Unit",
+            TestDefectType = "MissingTest",
+            FilePath = "src/GitGavel/GitHub/GitHubService.cs",
+            StartLine = 330,
+            EndLine = 380,
+            AgentName = "TestSentinelAgent",
+            SuggestedRemediation = "[Fact] public void TryMapFileLineToDiffPosition_MapsCorrectly() {}"
+        };
+
+        var reportCtx = new GitGavel.Reporting.ReportContext
+        {
+            Config = config,
+            RepoContext = new GitGavel.Discovery.RepoContext
+            {
+                RootDirectory = "/mock",
+                SpecFiles = [],
+                SourceFiles = [],
+                SarifFindings = []
+            },
+            Orchestration = new GitGavel.System2.OrchestrationResult
+            {
+                AllFindings = [secFinding, testFinding]
+            },
+            TriageDecisions = [],
+            ActivePullRequestNumber = 32,
+            GitCommitSha = "b93b5b5",
+            GitBranch = "fix/issue-1"
+        };
+
+        var postedDomains = await mock.PostPullRequestDomainReportsAsync("my-org", "my-repo", 32, reportCtx);
+
+        postedDomains.Should().BeEquivalentTo(["Security", "TestQuality"]);
+        mock.PostedPrDomainReports.Should().HaveCount(2);
+        mock.PostedPrDomainReports.Should().Contain(r => r.Domain == "Security" && r.ReportMarkdown.Contains("GitGavel Security Audit Report"));
+        mock.PostedPrDomainReports.Should().Contain(r => r.Domain == "TestQuality" && r.ReportMarkdown.Contains("GitGavel Test Quality & Coverage Report"));
+    }
+
+    [Fact]
+    public void GitHubService_TryMapFileLineToDiffPosition_MapsNewFileLineToDiffOffset()
+    {
+        var patch = """
+        @@ -10,4 +10,6 @@ public class GitService
+         line10
+         line11
+        +addedLine12
+        +addedLine13
+         line14
+         line15
+        """;
+
+        var mapped = GitHubService.TryMapFileLineToDiffPosition(patch, 12, out var pos);
+        mapped.Should().BeTrue();
+        pos.Should().Be(3);
     }
 }

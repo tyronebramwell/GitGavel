@@ -465,6 +465,28 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         var reportingEngine = new ReportingEngine();
         var generatedReports = await reportingEngine.GenerateReportsAsync(reportCtx, cancellationToken);
 
+        if (repoContext.IsPullRequestMode && prContext != null && !settings.DryRun && (settings.UseMock || owner != "local-owner"))
+        {
+            try
+            {
+                var postedDomains = await gitHubService.PostPullRequestDomainReportsAsync(
+                    owner,
+                    repo,
+                    prContext.PrNumber,
+                    reportCtx,
+                    cancellationToken);
+
+                if (postedDomains.Count > 0)
+                {
+                    AnsiConsole.MarkupLine($"[bold green]✓[/] Posted domain report comment(s) ([cyan]{string.Join(", ", postedDomains)}[/]) to Pull Request #{prContext.PrNumber}.\n");
+                }
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]✗ Failed to post domain report comments on PR #{prContext.PrNumber}:[/] {Markup.Escape(ex.Message)}\n");
+            }
+        }
+
         AnsiConsole.MarkupLine("[bold green]📁 Developer Reports Generated[/]\n");
         foreach (var reportFile in generatedReports)
         {

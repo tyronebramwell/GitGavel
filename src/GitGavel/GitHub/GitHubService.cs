@@ -2,15 +2,20 @@ using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using GitGavel.Configuration;
+using GitGavel.Reporting;
+using GitGavel.Reporting.Reporters;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
 using Octokit;
 
 namespace GitGavel.GitHub;
 
-public class GitHubService : IGitHubService
+public partial class GitHubService : IGitHubService
 {
+    [GeneratedRegex(@"^@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,\d+)?\s*@@", RegexOptions.Compiled)]
+    private static partial Regex DiffHunkHeaderRegex();
     private readonly GitHubClient _client;
     private readonly HttpClient _httpClient;
     private readonly string _token;
@@ -262,12 +267,23 @@ public class GitHubService : IGitHubService
             _ => PullRequestReviewEvent.Comment
         };
 
-        var draftComments = inlineDecisions
-            .Select(d => new DraftPullRequestReviewComment(
-                IssueFormatter.FormatInlinePrComment(d),
-                d.Finding.FilePath,
-                Math.Max(1, d.Finding.StartLine)))
-            .ToList();
+        var patchByFile = prContext.ChangedFiles
+            .GroupBy(f => f.FilePath.Replace('\\', '/').TrimStart('/'), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Patch, StringComparer.OrdinalIgnoreCase);
+
+        var draftComments = new List<DraftPullRequestReviewComment>();
+        foreach (var d in inlineDecisions)
+        {
+            var normPath = d.Finding.FilePath.Replace('\\', '/').TrimStart('/');
+            if (patchByFile.TryGetValue(normPath, out var patch) &&
+                TryMapFileLineToDiffPosition(patch, d.Finding.StartLine, out var diffPos))
+            {
+                draftComments.Add(new DraftPullRequestReviewComment(
+                    IssueFormatter.FormatInlinePrComment(d),
+                    normPath,
+                    diffPos));
+            }
+        }
 
         try
         {
@@ -306,6 +322,114 @@ public class GitHubService : IGitHubService
                 Verdict: "COMMENT"
             );
         }
+    }
+
+    public async Task<IReadOnlyList<string>> PostPullRequestDomainReportsAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        ReportContext reportContext,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_token))
+        {
+            throw new InvalidOperationException("GH_TOKEN is required to post Pull Request domain report comments on GitHub.");
+        }
+
+        var postedDomains = new List<string>();
+        var findings = reportContext.Orchestration.AllFindings;
+
+        if (findings.Any(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase)))
+        {
+            var secBody = SecurityReporter.Generate(reportContext);
+            await _client.Issue.Comment.Create(owner, repo, prNumber, secBody);
+            postedDomains.Add("Security");
+        }
+
+        if (findings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
+                              f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase)))
+        {
+            var qualBody = CodeQualityReporter.Generate(reportContext);
+            await _client.Issue.Comment.Create(owner, repo, prNumber, qualBody);
+            postedDomains.Add("CodeQuality");
+        }
+
+        if (findings.Any(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
+                              f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
+        {
+            var testBody = TestQualityReporter.Generate(reportContext);
+            await _client.Issue.Comment.Create(owner, repo, prNumber, testBody);
+            postedDomains.Add("TestQuality");
+        }
+
+        return postedDomains;
+    }
+
+    public static bool TryMapFileLineToDiffPosition(string? patch, int targetLine, out int position)
+    {
+        position = 0;
+        if (string.IsNullOrWhiteSpace(patch))
+        {
+            return false;
+        }
+
+        var lines = patch.Replace("\r\n", "\n").Split('\n');
+        var currentNewLine = 0;
+        var inHunk = false;
+        var currentPos = 0;
+        var firstAddedPos = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var match = DiffHunkHeaderRegex().Match(line);
+            if (match.Success)
+            {
+                if (inHunk)
+                {
+                    currentPos++;
+                }
+                inHunk = true;
+                currentNewLine = int.Parse(match.Groups[1].Value);
+                continue;
+            }
+
+            if (!inHunk) continue;
+
+            currentPos++;
+
+            if (line.StartsWith('+'))
+            {
+                if (firstAddedPos == 0) firstAddedPos = currentPos;
+                if (currentNewLine == targetLine)
+                {
+                    position = currentPos;
+                    return true;
+                }
+                currentNewLine++;
+            }
+            else if (line.StartsWith('-'))
+            {
+                // Deleted line does not advance new file line number
+            }
+            else
+            {
+                if (currentNewLine == targetLine)
+                {
+                    position = currentPos;
+                    return true;
+                }
+                currentNewLine++;
+            }
+        }
+
+        if (firstAddedPos > 0)
+        {
+            position = firstAddedPos;
+            return true;
+        }
+
+        return false;
     }
 
     private async Task SyncNodeToProjectV2Async(
