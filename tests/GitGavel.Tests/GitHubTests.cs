@@ -380,12 +380,13 @@ public class GitHubTests
             GitBranch = "fix/issue-1"
         };
 
-        var postedDomains = await mock.PostPullRequestDomainReportsAsync("my-org", "my-repo", 32, reportCtx);
+        var engine = new GitGavel.Reporting.ReportingEngine();
+        var postedDomains = await engine.PublishPullRequestDomainReportsAsync(reportCtx, mock, "my-org", "my-repo", dryRun: false, useMock: true);
 
         postedDomains.Should().BeEquivalentTo(["Security", "TestQuality"]);
-        mock.PostedPrDomainReports.Should().HaveCount(2);
-        mock.PostedPrDomainReports.Should().Contain(r => r.Domain == "Security" && r.ReportMarkdown.Contains("GitGavel Security Audit Report"));
-        mock.PostedPrDomainReports.Should().Contain(r => r.Domain == "TestQuality" && r.ReportMarkdown.Contains("GitGavel Test Quality & Coverage Report"));
+        mock.PostedPrComments.Should().HaveCount(2);
+        mock.PostedPrComments.Should().Contain(r => r.PrNumber == 32 && r.CommentBody.Contains("GitGavel Security Audit Report"));
+        mock.PostedPrComments.Should().Contain(r => r.PrNumber == 32 && r.CommentBody.Contains("GitGavel Test Quality & Coverage Report"));
     }
 
     [Fact]

@@ -33,6 +33,7 @@ public class SpecDriftAgent : ISubagent
         var promptBuilder = new StringBuilder();
         promptBuilder.AppendLine("You are the Spec Drift Agent. Compare the repository specifications/documentation against the actual source code implementation.");
         promptBuilder.AppendLine("Identify any missing endpoints, divergent parameters, unimplemented requirements, or schema drift.");
+        promptBuilder.AppendLine("IMPORTANT: Do NOT report compliant implementations or positive alignments where no remediation is needed; return [] if all changes match the specification.");
         if (context.IsPullRequestMode && context.ActivePullRequest != null)
         {
             promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");

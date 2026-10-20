@@ -4,8 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using GitGavel.Configuration;
-using GitGavel.Reporting;
-using GitGavel.Reporting.Reporters;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
 using Octokit;
@@ -324,51 +322,25 @@ public partial class GitHubService : IGitHubService
         }
     }
 
-    public async Task<IReadOnlyList<string>> PostPullRequestDomainReportsAsync(
+    public async Task PostPullRequestCommentAsync(
         string owner,
         string repo,
         int prNumber,
-        ReportContext reportContext,
+        string commentBody,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(_token))
         {
-            throw new InvalidOperationException("GH_TOKEN is required to post Pull Request domain report comments on GitHub.");
+            throw new InvalidOperationException("GH_TOKEN is required to post Pull Request comments on GitHub.");
         }
 
-        var postedDomains = new List<string>();
-        var findings = reportContext.Orchestration.AllFindings;
-
-        if (findings.Any(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase)))
-        {
-            var secBody = SecurityReporter.Generate(reportContext);
-            await _client.Issue.Comment.Create(owner, repo, prNumber, secBody);
-            postedDomains.Add("Security");
-        }
-
-        if (findings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
-                              f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase)))
-        {
-            var qualBody = CodeQualityReporter.Generate(reportContext);
-            await _client.Issue.Comment.Create(owner, repo, prNumber, qualBody);
-            postedDomains.Add("CodeQuality");
-        }
-
-        if (findings.Any(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
-                              f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
-        {
-            var testBody = TestQualityReporter.Generate(reportContext);
-            await _client.Issue.Comment.Create(owner, repo, prNumber, testBody);
-            postedDomains.Add("TestQuality");
-        }
-
-        return postedDomains;
+        await _client.Issue.Comment.Create(owner, repo, prNumber, commentBody);
     }
 
     public static bool TryMapFileLineToDiffPosition(string? patch, int targetLine, out int position)
     {
         position = 0;
-        if (string.IsNullOrWhiteSpace(patch))
+        if (string.IsNullOrWhiteSpace(patch) || targetLine < 1)
         {
             return false;
         }
@@ -377,7 +349,6 @@ public partial class GitHubService : IGitHubService
         var currentNewLine = 0;
         var inHunk = false;
         var currentPos = 0;
-        var firstAddedPos = 0;
 
         for (var i = 0; i < lines.Length; i++)
         {
@@ -394,13 +365,12 @@ public partial class GitHubService : IGitHubService
                 continue;
             }
 
-            if (!inHunk) continue;
+            if (!inHunk || string.IsNullOrEmpty(line)) continue;
 
             currentPos++;
 
             if (line.StartsWith('+'))
             {
-                if (firstAddedPos == 0) firstAddedPos = currentPos;
                 if (currentNewLine == targetLine)
                 {
                     position = currentPos;
@@ -421,12 +391,6 @@ public partial class GitHubService : IGitHubService
                 }
                 currentNewLine++;
             }
-        }
-
-        if (firstAddedPos > 0)
-        {
-            position = firstAddedPos;
-            return true;
         }
 
         return false;

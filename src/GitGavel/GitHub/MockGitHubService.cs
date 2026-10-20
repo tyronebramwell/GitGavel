@@ -1,6 +1,4 @@
 using GitGavel.Configuration;
-using GitGavel.Reporting;
-using GitGavel.Reporting.Reporters;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
 
@@ -14,7 +12,8 @@ public class MockGitHubService : IGitHubService
     public List<(IssueResolutionDecision Decision, ClosedIssueResult Result, string CommentBody)> ClosedIssues { get; } = [];
     public PullRequestContext? MockPullRequest { get; set; }
     public List<(PostedPrReviewResult Result, string SummaryBody, List<string> InlineBodies)> PostedPrReviews { get; } = [];
-    public List<(int PrNumber, string Domain, string ReportMarkdown)> PostedPrDomainReports { get; } = [];
+    public List<(int PrNumber, string FilePath, int DiffPosition, string Body)> PostedPrInlineComments { get; } = [];
+    public List<(int PrNumber, string CommentBody)> PostedPrComments { get; } = [];
 
     private int _nextIssueNumber = 100;
     private long _nextReviewId = 500;
@@ -162,7 +161,25 @@ public class MockGitHubService : IGitHubService
             ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList()
             : [];
 
-        var inlineBodies = inlineDecisions.Select(IssueFormatter.FormatInlinePrComment).ToList();
+        var patchByFile = prContext.ChangedFiles
+            .GroupBy(f => f.FilePath.Replace('\\', '/').TrimStart('/'), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Patch, StringComparer.OrdinalIgnoreCase);
+
+        var inlineBodies = new List<string>();
+        foreach (var d in inlineDecisions)
+        {
+            var body = IssueFormatter.FormatInlinePrComment(d);
+            inlineBodies.Add(body);
+
+            var normPath = d.Finding.FilePath.Replace('\\', '/').TrimStart('/');
+            var diffPos = patchByFile.TryGetValue(normPath, out var patch) &&
+                          GitHubService.TryMapFileLineToDiffPosition(patch, d.Finding.StartLine, out var mappedPos)
+                ? mappedPos
+                : Math.Max(1, d.Finding.StartLine);
+
+            PostedPrInlineComments.Add((prNumber, normPath, diffPos, body));
+        }
+
         var summaryBody = config.Github.PullRequests.PostSummaryComment
             ? IssueFormatter.FormatPrReviewSummary(prContext, decisions)
             : "";
@@ -183,39 +200,14 @@ public class MockGitHubService : IGitHubService
         return Task.FromResult(result);
     }
 
-    public Task<IReadOnlyList<string>> PostPullRequestDomainReportsAsync(
+    public Task PostPullRequestCommentAsync(
         string owner,
         string repo,
         int prNumber,
-        ReportContext reportContext,
+        string commentBody,
         CancellationToken ct = default)
     {
-        var postedDomains = new List<string>();
-        var findings = reportContext.Orchestration.AllFindings;
-
-        if (findings.Any(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase)))
-        {
-            var secBody = SecurityReporter.Generate(reportContext);
-            PostedPrDomainReports.Add((prNumber, "Security", secBody));
-            postedDomains.Add("Security");
-        }
-
-        if (findings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
-                              f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase)))
-        {
-            var qualBody = CodeQualityReporter.Generate(reportContext);
-            PostedPrDomainReports.Add((prNumber, "CodeQuality", qualBody));
-            postedDomains.Add("CodeQuality");
-        }
-
-        if (findings.Any(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
-                              f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
-        {
-            var testBody = TestQualityReporter.Generate(reportContext);
-            PostedPrDomainReports.Add((prNumber, "TestQuality", testBody));
-            postedDomains.Add("TestQuality");
-        }
-
-        return Task.FromResult<IReadOnlyList<string>>(postedDomains);
+        PostedPrComments.Add((prNumber, commentBody));
+        return Task.CompletedTask;
     }
 }
