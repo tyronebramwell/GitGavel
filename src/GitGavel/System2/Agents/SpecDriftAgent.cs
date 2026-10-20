@@ -39,10 +39,10 @@ public class SpecDriftAgent : ISubagent
         }
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Specification Documents:");
-        foreach (var spec in context.SpecFiles.Take(5))
+        foreach (var spec in context.SpecFiles)
         {
             promptBuilder.AppendLine($"--- File: {spec.RelativePath} ---");
-            promptBuilder.AppendLine(spec.Content.Length > 4000 ? spec.Content[..4000] + "\n...(truncated)" : spec.Content);
+            promptBuilder.AppendLine(spec.Content.Length > 32000 ? spec.Content[..32000] + "\n...(truncated)" : spec.Content);
         }
 
         promptBuilder.AppendLine();

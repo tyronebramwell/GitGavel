@@ -63,29 +63,29 @@ public class TestSentinelAgent : ISubagent
         }
         else
         {
-            foreach (var testFile in context.TestFiles.Take(15))
+            foreach (var testFile in context.TestFiles)
             {
                 promptBuilder.AppendLine($"--- Test File: {testFile.RelativePath} ---");
                 if (!string.IsNullOrWhiteSpace(testFile.DiffPatch))
                 {
                     promptBuilder.AppendLine("PR Diff Patch:");
-                    promptBuilder.AppendLine(testFile.DiffPatch.Length > 3000 ? testFile.DiffPatch[..3000] + "\n...(truncated)" : testFile.DiffPatch);
+                    promptBuilder.AppendLine(testFile.DiffPatch.Length > 4000 ? testFile.DiffPatch[..4000] + "\n...(truncated)" : testFile.DiffPatch);
                 }
-                promptBuilder.AppendLine(testFile.Content.Length > 4000 ? testFile.Content[..4000] + "\n...(truncated)" : testFile.Content);
+                promptBuilder.AppendLine(testFile.Content.Length > 8000 ? testFile.Content[..8000] + "\n...(truncated)" : testFile.Content);
             }
         }
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Production Source Files Under Audit:");
-        foreach (var src in context.SourceFiles.Take(12))
+        foreach (var src in context.SourceFiles)
         {
             promptBuilder.AppendLine($"--- Source File: {src.RelativePath} ---");
             if (!string.IsNullOrWhiteSpace(src.DiffPatch))
             {
                 promptBuilder.AppendLine("PR Diff Patch:");
-                promptBuilder.AppendLine(src.DiffPatch.Length > 3000 ? src.DiffPatch[..3000] + "\n...(truncated)" : src.DiffPatch);
+                promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
             }
-            promptBuilder.AppendLine(src.Content.Length > 4000 ? src.Content[..4000] + "\n...(truncated)" : src.Content);
+            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
         }
 
         promptBuilder.AppendLine();

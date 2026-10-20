@@ -40,15 +40,15 @@ public class SecurityAuditorAgent : ISubagent
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Source Code Files Under Audit:");
-        foreach (var src in context.SourceFiles.Take(12))
+        foreach (var src in context.SourceFiles)
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
             if (!string.IsNullOrWhiteSpace(src.DiffPatch))
             {
                 promptBuilder.AppendLine("PR Diff Patch:");
-                promptBuilder.AppendLine(src.DiffPatch.Length > 3000 ? src.DiffPatch[..3000] + "\n...(truncated)" : src.DiffPatch);
+                promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
             }
-            promptBuilder.AppendLine(src.Content.Length > 3000 ? src.Content[..3000] + "\n...(truncated)" : src.Content);
+            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
         }
 
         promptBuilder.AppendLine();
