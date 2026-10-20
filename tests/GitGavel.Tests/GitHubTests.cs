@@ -406,4 +406,180 @@ public class GitHubTests
         mapped.Should().BeTrue();
         pos.Should().Be(3);
     }
+
+    [Theory]
+    [InlineData(null, 10)]
+    [InlineData("", 10)]
+    [InlineData("   ", 10)]
+    [InlineData("not a valid diff hunk", 10)]
+    [InlineData("@@ -10,2 +10,2 @@\n line10\n+line11", 0)]
+    [InlineData("@@ -10,2 +10,2 @@\n line10\n+line11", -5)]
+    [InlineData("@@ -10,2 +10,2 @@\n line10\n+line11", 999)]
+    public void GitHubService_TryMapFileLineToDiffPosition_WithInvalidOrOutOfRangeInputs_ReturnsFalse(string? patch, int targetLine)
+    {
+        var mapped = GitHubService.TryMapFileLineToDiffPosition(patch, targetLine, out var pos);
+        mapped.Should().BeFalse();
+        pos.Should().Be(0);
+    }
+
+    [Fact]
+    public void GitHubService_TryMapFileLineToDiffPosition_HandlesContextLinesDeletionsAndMultipleHunks()
+    {
+        var multiHunkPatch = string.Join("\n",
+            "@@ -10,4 +10,4 @@ public class Sample",
+            " contextLine10",
+            "-deletedOldLine11",
+            "+addedNewLine11",
+            " contextLine12",
+            "@@ -30,2 +30,3 @@ public void SecondMethod()",
+            " contextLine30",
+            "+addedNewLine31",
+            " contextLine32");
+
+        // First line of hunk 1 (context line 10 -> position 1)
+        GitHubService.TryMapFileLineToDiffPosition(multiHunkPatch, 10, out var pos10).Should().BeTrue();
+        pos10.Should().Be(1);
+
+        // Added line 11 after deleted line -> position 3 (since position 2 is the '-' line)
+        GitHubService.TryMapFileLineToDiffPosition(multiHunkPatch, 11, out var pos11).Should().BeTrue();
+        pos11.Should().Be(3);
+
+        // Last line of hunk 1 (context line 12 -> position 4)
+        GitHubService.TryMapFileLineToDiffPosition(multiHunkPatch, 12, out var pos12).Should().BeTrue();
+        pos12.Should().Be(4);
+
+        // Line between hunks (not in diff -> returns false)
+        GitHubService.TryMapFileLineToDiffPosition(multiHunkPatch, 20, out _).Should().BeFalse();
+
+        // Second hunk: header is position 5, contextLine30 is position 6, addedNewLine31 is position 7, contextLine32 is position 8
+        GitHubService.TryMapFileLineToDiffPosition(multiHunkPatch, 30, out var pos30).Should().BeTrue();
+        pos30.Should().Be(6);
+
+        GitHubService.TryMapFileLineToDiffPosition(multiHunkPatch, 31, out var pos31).Should().BeTrue();
+        pos31.Should().Be(7);
+
+        GitHubService.TryMapFileLineToDiffPosition(multiHunkPatch, 32, out var pos32).Should().BeTrue();
+        pos32.Should().Be(8);
+    }
+
+    [Fact]
+    public async Task GitHubService_PostPullRequestReviewAsync_MapsComplexMultiHunkDiffPositionsCorrectly()
+    {
+        var mock = new MockGitHubService();
+        var config = new GitGavelConfig();
+
+        var complexPatch = string.Join("\n",
+            "@@ -5,3 +5,4 @@",
+            " line5",
+            "-oldLine6",
+            "+newLine6",
+            "+newLine7",
+            "@@ -20,2 +21,3 @@",
+            " line21",
+            "+targetLine22",
+            " line23");
+
+        var prContext = new PullRequestContext
+        {
+            PrNumber = 55,
+            Title = "Complex Diff PR",
+            HeadSha = "1234567890abcdef",
+            ChangedFiles =
+            [
+                new PullRequestChangedFile("src/ComplexService.cs", "modified", 3, 1, complexPatch)
+            ]
+        };
+
+        var decisions = new List<PrCommentTriageDecision>
+        {
+            new()
+            {
+                Finding = new FindingCandidate
+                {
+                    FilePath = "src/ComplexService.cs",
+                    StartLine = 22,
+                    EndLine = 22,
+                    Category = "Security",
+                    Severity = "High",
+                    Title = "Validate input on line 22",
+                    Summary = "Line 22 in second hunk needs validation.",
+                    AgentName = "SecurityAuditor",
+                    SuggestedRemediation = "Guard.NotNull(input);"
+                },
+                JevScore = 4.0,
+                PriorityLabel = "P1",
+                Action = PrCommentAction.PostInlineReview,
+                Confidence = 0.95
+            }
+        };
+
+        await mock.PostPullRequestReviewAsync("my-org", "my-repo", prContext, decisions, config);
+
+        // Hunk 1 has 4 lines (pos 1..4), Hunk 2 header is pos 5, line21 is pos 6, targetLine22 is pos 7
+        mock.PostedPrInlineComments.Should().ContainSingle();
+        mock.PostedPrInlineComments[0].FilePath.Should().Be("src/ComplexService.cs");
+        mock.PostedPrInlineComments[0].DiffPosition.Should().Be(7);
+    }
+
+    [Theory]
+    [InlineData("Security", "Security")]
+    [InlineData("SpecDrift", "CodeQuality")]
+    [InlineData("Refactoring", "CodeQuality")]
+    [InlineData("Testing", "TestQuality")]
+    [InlineData("None", "")]
+    public async Task ReportingEngine_PublishPullRequestDomainReports_PostsOnlyMatchingDomainOrNone(string category, string expectedDomain)
+    {
+        var mock = new MockGitHubService();
+        var findings = new List<FindingCandidate>();
+
+        if (category != "None")
+        {
+            findings.Add(new FindingCandidate
+            {
+                Title = $"{category} Finding",
+                Summary = "Test summary",
+                Category = category,
+                Severity = "Medium",
+                FilePath = "src/Service.cs",
+                StartLine = 10,
+                EndLine = 15,
+                AgentName = category == "Testing" ? "TestSentinelAgent" : "Subagent",
+                SuggestedRemediation = "Fix"
+            });
+        }
+
+        var reportCtx = new GitGavel.Reporting.ReportContext
+        {
+            Config = new GitGavelConfig(),
+            RepoContext = new GitGavel.Discovery.RepoContext
+            {
+                RootDirectory = "/mock",
+                SpecFiles = [],
+                SourceFiles = [],
+                SarifFindings = []
+            },
+            Orchestration = new GitGavel.System2.OrchestrationResult
+            {
+                AllFindings = findings
+            },
+            TriageDecisions = [],
+            ActivePullRequestNumber = 32,
+            GitCommitSha = "abc1234",
+            GitBranch = "fix/test"
+        };
+
+        var engine = new GitGavel.Reporting.ReportingEngine();
+        var posted = await engine.PublishPullRequestDomainReportsAsync(reportCtx, mock, "my-org", "my-repo", dryRun: false, useMock: true);
+
+        if (string.IsNullOrEmpty(expectedDomain))
+        {
+            posted.Should().BeEmpty();
+            mock.PostedPrComments.Should().BeEmpty();
+        }
+        else
+        {
+            posted.Should().ContainSingle().Which.Should().Be(expectedDomain);
+            mock.PostedPrComments.Should().ContainSingle();
+        }
+    }
 }
