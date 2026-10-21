@@ -207,6 +207,20 @@ public class MockGitHubService : IGitHubService
         string commentBody,
         CancellationToken ct = default)
     {
+        var marker = IssueFormatter.ExtractStickyCommentMarker(commentBody);
+        if (!string.IsNullOrWhiteSpace(marker))
+        {
+            var existingIdx = PostedPrComments.FindIndex(c =>
+                c.PrNumber == prNumber &&
+                c.CommentBody.Contains(marker, StringComparison.OrdinalIgnoreCase));
+
+            if (existingIdx >= 0)
+            {
+                PostedPrComments[existingIdx] = (prNumber, commentBody);
+                return Task.CompletedTask;
+            }
+        }
+
         PostedPrComments.Add((prNumber, commentBody));
         return Task.CompletedTask;
     }

@@ -303,6 +303,21 @@ public partial class GitHubService : IGitHubService
 
         try
         {
+            if (draftComments.Count == 0)
+            {
+                // When no new inline diff comments are being added, upsert the sticky PR summary comment in place
+                // rather than appending another top-level review event to the PR timeline.
+                var upserted = await UpsertPullRequestCommentAsync(owner, repo, prNumber, summaryBody);
+                return new PostedPrReviewResult(
+                    PrNumber: prNumber,
+                    ReviewId: upserted.Id,
+                    HtmlUrl: upserted.HtmlUrl,
+                    InlineCommentsPosted: 0,
+                    SummaryPosted: true,
+                    Verdict: "COMMENT"
+                );
+            }
+
             var reviewCreate = new PullRequestReviewCreate
             {
                 Body = summaryBody,
@@ -327,8 +342,8 @@ public partial class GitHubService : IGitHubService
         }
         catch
         {
-            // Fallback: if diff position validation rejects an inline comment or self-approval, post summary comment on the PR
-            var comment = await _client.Issue.Comment.Create(owner, repo, prNumber, summaryBody);
+            // Fallback: if diff position validation rejects an inline comment or self-approval, upsert summary comment on the PR
+            var comment = await UpsertPullRequestCommentAsync(owner, repo, prNumber, summaryBody);
             return new PostedPrReviewResult(
                 PrNumber: prNumber,
                 ReviewId: comment.Id,
@@ -352,7 +367,36 @@ public partial class GitHubService : IGitHubService
             throw new InvalidOperationException("GH_TOKEN is required to post Pull Request comments on GitHub.");
         }
 
-        await _client.Issue.Comment.Create(owner, repo, prNumber, commentBody);
+        await UpsertPullRequestCommentAsync(owner, repo, prNumber, commentBody);
+    }
+
+    private async Task<IssueComment> UpsertPullRequestCommentAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        string commentBody)
+    {
+        var marker = IssueFormatter.ExtractStickyCommentMarker(commentBody);
+        if (!string.IsNullOrWhiteSpace(marker))
+        {
+            try
+            {
+                var existingComments = await _client.Issue.Comment.GetAllForIssue(owner, repo, prNumber);
+                var existingMatch = existingComments.LastOrDefault(c =>
+                    c.Body != null && c.Body.Contains(marker, StringComparison.OrdinalIgnoreCase));
+
+                if (existingMatch != null)
+                {
+                    return await _client.Issue.Comment.Update(owner, repo, existingMatch.Id, commentBody);
+                }
+            }
+            catch
+            {
+                // Fall back to creating a new comment if listing/updating fails
+            }
+        }
+
+        return await _client.Issue.Comment.Create(owner, repo, prNumber, commentBody);
     }
 
     public static bool TryMapFileLineToDiffPosition(string? patch, int targetLine, out int position)

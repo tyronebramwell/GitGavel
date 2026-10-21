@@ -58,27 +58,39 @@ public class ReportingEngine
 
         var prNumber = ctx.ActivePullRequestNumber.Value;
         var postedDomains = new List<string>();
-        var findings = ctx.Orchestration.AllFindings;
+        var discardedSet = ctx.PrCommentDecisions
+            .Where(d => d.Action == GitGavel.System1.Models.PrCommentAction.Discard)
+            .Select(d => d.Finding)
+            .ToHashSet();
 
-        if (findings.Any(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase)))
+        var activeFindings = ctx.Orchestration.AllFindings
+            .Where(f => !discardedSet.Contains(f))
+            .ToList();
+
+        var filteredCtx = ctx with
         {
-            var secBody = SecurityReporter.Generate(ctx);
+            Orchestration = ctx.Orchestration with { AllFindings = activeFindings }
+        };
+
+        if (activeFindings.Any(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase)))
+        {
+            var secBody = SecurityReporter.Generate(filteredCtx) + "\n<!-- gitgavel-sticky-comment: security-report -->\n";
             await gitHubService.PostPullRequestCommentAsync(owner, repo, prNumber, secBody, ct);
             postedDomains.Add("Security");
         }
 
-        if (findings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
-                              f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase)))
+        if (activeFindings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
+                                    f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase)))
         {
-            var qualBody = CodeQualityReporter.Generate(ctx);
+            var qualBody = CodeQualityReporter.Generate(filteredCtx) + "\n<!-- gitgavel-sticky-comment: code-quality-report -->\n";
             await gitHubService.PostPullRequestCommentAsync(owner, repo, prNumber, qualBody, ct);
             postedDomains.Add("CodeQuality");
         }
 
-        if (findings.Any(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
-                              f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
+        if (activeFindings.Any(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
+                                    f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
         {
-            var testBody = TestQualityReporter.Generate(ctx);
+            var testBody = TestQualityReporter.Generate(filteredCtx) + "\n<!-- gitgavel-sticky-comment: test-quality-report -->\n";
             await gitHubService.PostPullRequestCommentAsync(owner, repo, prNumber, testBody, ct);
             postedDomains.Add("TestQuality");
         }
