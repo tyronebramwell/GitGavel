@@ -119,19 +119,22 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
                 Labels: ["ai-backlog", "testing"]));
         }
 
-        IGitHubService gitHubService = settings.UseMock || settings.DryRun
+        var ghToken = Environment.GetEnvironmentVariable("GH_TOKEN") ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+        IGitHubService gitHubService = settings.UseMock || (settings.DryRun && string.IsNullOrWhiteSpace(ghToken))
             ? mockGh
             : new GitHubService();
 
         // 1. File & Context Scanning
         var scanner = new FileScanner(_gitService);
+        RepoContext fullRepoContext = null!;
         RepoContext repoContext = null!;
 
         await AnsiConsole.Status()
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Scanning repository files, specs, tests, and commit history...", async ctx =>
             {
-                repoContext = await scanner.ScanAsync(repoDir, config);
+                fullRepoContext = await scanner.ScanAsync(repoDir, config);
+                repoContext = fullRepoContext;
             });
 
         PullRequestContext? prContext = null;
@@ -195,41 +198,42 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         // Display Findings Table
         if (orchestrationResult.AllFindings.Count == 0)
         {
-            AnsiConsole.MarkupLine("[green]No candidate issues detected across all subagents.[/]");
-            return 0;
+            AnsiConsole.MarkupLine("[green]No candidate issues detected across all subagents.[/]\n");
         }
-
-        var findingsTable = new Table().Border(TableBorder.Rounded);
-        findingsTable.AddColumn("[bold]#[/]");
-        findingsTable.AddColumn("[bold]Category[/]");
-        findingsTable.AddColumn("[bold]Severity[/]");
-        findingsTable.AddColumn("[bold]Title[/]");
-        findingsTable.AddColumn("[bold]Location[/]");
-        findingsTable.AddColumn("[bold]Agent[/]");
-
-        for (var i = 0; i < orchestrationResult.AllFindings.Count; i++)
+        else
         {
-            var f = orchestrationResult.AllFindings[i];
-            var sevColor = f.Severity switch
+            var findingsTable = new Table().Border(TableBorder.Rounded);
+            findingsTable.AddColumn("[bold]#[/]");
+            findingsTable.AddColumn("[bold]Category[/]");
+            findingsTable.AddColumn("[bold]Severity[/]");
+            findingsTable.AddColumn("[bold]Title[/]");
+            findingsTable.AddColumn("[bold]Location[/]");
+            findingsTable.AddColumn("[bold]Agent[/]");
+
+            for (var i = 0; i < orchestrationResult.AllFindings.Count; i++)
             {
-                "Critical" => "red bold",
-                "High" => "red",
-                "Medium" => "yellow",
-                _ => "grey"
-            };
+                var f = orchestrationResult.AllFindings[i];
+                var sevColor = f.Severity switch
+                {
+                    "Critical" => "red bold",
+                    "High" => "red",
+                    "Medium" => "yellow",
+                    _ => "grey"
+                };
 
-            findingsTable.AddRow(
-                (i + 1).ToString(),
-                f.Category,
-                $"[{sevColor}]{f.Severity}[/]",
-                Markup.Escape(f.Title),
-                $"{Markup.Escape(f.FilePath)}:{f.StartLine}",
-                f.AgentName
-            );
+                findingsTable.AddRow(
+                    (i + 1).ToString(),
+                    f.Category,
+                    $"[{sevColor}]{f.Severity}[/]",
+                    Markup.Escape(f.Title),
+                    $"{Markup.Escape(f.FilePath)}:{f.StartLine}",
+                    f.AgentName
+                );
+            }
+
+            AnsiConsole.Write(findingsTable);
+            AnsiConsole.WriteLine();
         }
-
-        AnsiConsole.Write(findingsTable);
-        AnsiConsole.WriteLine();
 
         List<ExistingIssue> existingIssues = [];
         await AnsiConsole.Status()
@@ -412,7 +416,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
                 .Spinner(Spinner.Known.Dots)
                 .StartAsync($"Evaluating {openIssues.Count} open issue(s) against recent commits for automated closure...", async ctx =>
                 {
-                    resolutionResult = await orchestrator.EvaluateIssueResolutionsAsync(openIssues, repoContext, config, cancellationToken);
+                    resolutionResult = await orchestrator.EvaluateIssueResolutionsAsync(openIssues, fullRepoContext, config, cancellationToken)
+                        ?? new IssueResolutionAgentResult { AgentName = "IssueResolutionAuditor", Candidates = [] };
                     resolutionDecisions = await triageEngine.VerifyIssueResolutionsAsync(resolutionResult.Candidates, openIssues, config, cancellationToken);
                 });
 

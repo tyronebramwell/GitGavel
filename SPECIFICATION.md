@@ -163,7 +163,7 @@ Once candidate findings, PR review comments, and issue resolution proofs are gen
 
 ### 5.2 Issue Resolution Verification with Jev `Noul`
 * **Primitive**: `Noul` (Boolean probability $0.0 \dots 1.0$).
-* **Query**: `Given open issue #[Issue_N] and the code changes in commit(s) [Commit_SHAs], has the root cause or requirement described in the issue been completely resolved?`
+* **Query**: `Does the audit resolution verification confirm that the issue has been fixed in the codebase by the cited commits and fix explanation?`
 * **Behavior**:
   * $P \ge 0.90$: Confirmed resolved $\rightarrow$ **Post closing summary comment with commit references, close issue as `completed`, and move project card to `Done`**.
   * $0.60 \le P < 0.90$: Partially resolved or uncertain $\rightarrow$ **Post progress comment referencing the commits without closing the issue**.
@@ -456,7 +456,8 @@ RUN apk add --no-cache \
     zlib
 WORKDIR /app
 COPY --from=build /app/publish/GitGavel /usr/local/bin/gitgavel
-RUN chmod +x /usr/local/bin/gitgavel
+RUN chmod +x /usr/local/bin/gitgavel && \
+    git config --global --add safe.directory '*'
 
 ENTRYPOINT ["gitgavel"]
 ```

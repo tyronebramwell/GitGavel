@@ -112,8 +112,11 @@ public class IssueResolutionAgent
 
             var candidates = FindingParser.ParseIssueResolutions(response.Content);
 
-            // Enrich commit summaries from context.RecentCommits if the LLM only provided SHAs
-            var enriched = candidates.Select(c => EnrichCommitSummaries(c, context)).ToList();
+            // Filter to resolved candidates and enrich commit summaries from context.RecentCommits
+            var enriched = candidates
+                .Where(c => c.IsResolved)
+                .Select(c => EnrichCommitSummaries(c, context))
+                .ToList();
 
             return new IssueResolutionAgentResult
             {
@@ -138,13 +141,21 @@ public class IssueResolutionAgent
 
     private static IssueResolutionCandidate EnrichCommitSummaries(IssueResolutionCandidate candidate, RepoContext context)
     {
-        if (candidate.ResolvingCommitSummaries.Count > 0 || candidate.ResolvingCommitShas.Count == 0)
+        var shas = candidate.ResolvingCommitShas;
+        if (shas.Count == 0 && candidate.IsResolved && context.RecentCommits.Count > 0)
         {
-            return candidate;
+            shas = [context.RecentCommits[0].Sha];
+        }
+
+        if (candidate.ResolvingCommitSummaries.Count > 0 || shas.Count == 0)
+        {
+            return shas == candidate.ResolvingCommitShas
+                ? candidate
+                : candidate with { ResolvingCommitShas = shas };
         }
 
         var summaries = new List<string>();
-        foreach (var sha in candidate.ResolvingCommitShas)
+        foreach (var sha in shas)
         {
             var match = context.RecentCommits.FirstOrDefault(c =>
                 c.Sha.StartsWith(sha, StringComparison.OrdinalIgnoreCase) ||
@@ -161,6 +172,10 @@ public class IssueResolutionAgent
             }
         }
 
-        return candidate with { ResolvingCommitSummaries = summaries };
+        return candidate with
+        {
+            ResolvingCommitShas = shas,
+            ResolvingCommitSummaries = summaries
+        };
     }
 }
