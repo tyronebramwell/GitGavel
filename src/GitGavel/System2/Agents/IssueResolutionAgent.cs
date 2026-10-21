@@ -26,6 +26,7 @@ public class IssueResolutionAgent
     {
         var activeIssues = openIssues
             .Where(i => string.Equals(i.State, "open", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(i => i.Number)
             .ToList();
 
         if (activeIssues.Count == 0)
@@ -43,7 +44,7 @@ public class IssueResolutionAgent
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Open GitHub Issues:");
-        foreach (var issue in activeIssues.Take(25))
+        foreach (var issue in activeIssues)
         {
             promptBuilder.AppendLine($"--- Issue #{issue.Number}: {issue.Title} ---");
             var body = issue.Body ?? "";
@@ -66,11 +67,22 @@ public class IssueResolutionAgent
         }
 
         promptBuilder.AppendLine();
+        promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
+        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
+        foreach (var sum in summaries)
+        {
+            var symbolList = sum.Symbols.Count > 0
+                ? string.Join(", ", sum.Symbols.Select(s => $"{s.Kind} {s.Name}"))
+                : "None";
+            promptBuilder.AppendLine($"- File: `{sum.RelativePath}` | Symbols: {symbolList}");
+        }
+
+        promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Current Repository Files Snapshot:");
-        foreach (var src in context.SourceFiles.Concat(context.TestFiles).Take(15))
+        foreach (var src in context.SourceFiles.Concat(context.TestFiles))
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
-            promptBuilder.AppendLine(src.Content.Length > 3000 ? src.Content[..3000] + "\n...(truncated)" : src.Content);
+            promptBuilder.AppendLine(src.Content.Length > 6000 ? src.Content[..6000] + "\n...(truncated)" : src.Content);
         }
 
         promptBuilder.AppendLine();

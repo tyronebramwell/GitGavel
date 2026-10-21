@@ -3,6 +3,7 @@ using GitGavel.Git;
 
 namespace GitGavel.Tests;
 
+[Collection("EnvironmentVariables")]
 public class GitServiceTests
 {
     [Fact]

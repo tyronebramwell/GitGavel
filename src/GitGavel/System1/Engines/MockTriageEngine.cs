@@ -178,7 +178,7 @@ public class MockTriageEngine : ITriageEngine
             };
 
             var prio = score >= 4.5 ? "P0" : score >= 3.5 ? "P1" : score >= 2.5 ? "P2" : "P3";
-            var action = score >= 2.5 ? PrCommentAction.PostInlineReview : PrCommentAction.SummaryCommentOnly;
+            var action = score >= 2.5 ? PrCommentAction.PostInlineReview : PrCommentAction.Discard;
 
             decisions.Add(new PrCommentTriageDecision
             {

@@ -20,10 +20,12 @@ namespace GitGavel.Commands;
 public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 {
     private readonly IGitService _gitService;
+    private readonly ISubagentOrchestrator? _injectedOrchestrator;
 
-    public AuditCommand(IGitService? gitService = null)
+    public AuditCommand(IGitService? gitService = null, ISubagentOrchestrator? orchestrator = null)
     {
         _gitService = gitService ?? new GitService();
+        _injectedOrchestrator = orchestrator;
     }
 
     public class Settings : CommandSettings
@@ -173,7 +175,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             forceMock: settings.UseMock || settings.UseMockLlm,
             fallbackClient: new GeminiLlmClient(apiKey));
 
-        var orchestrator = new SubagentOrchestrator(llmClientFactory);
+        ISubagentOrchestrator orchestrator = _injectedOrchestrator ?? new SubagentOrchestrator(llmClientFactory);
         OrchestrationResult orchestrationResult = null!;
 
         await AnsiConsole.Status()
@@ -462,6 +464,19 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         var reportingEngine = new ReportingEngine();
         var generatedReports = await reportingEngine.GenerateReportsAsync(reportCtx, cancellationToken);
+        var postedDomains = await reportingEngine.PublishPullRequestDomainReportsAsync(
+            reportCtx,
+            gitHubService,
+            owner,
+            repo,
+            settings.DryRun,
+            settings.UseMock,
+            cancellationToken);
+
+        if (postedDomains.Count > 0)
+        {
+            AnsiConsole.MarkupLine($"[bold green]✓[/] Posted domain report comment(s) ([cyan]{string.Join(", ", postedDomains)}[/]) to Pull Request #{activePrNumber}.\n");
+        }
 
         AnsiConsole.MarkupLine("[bold green]📁 Developer Reports Generated[/]\n");
         foreach (var reportFile in generatedReports)

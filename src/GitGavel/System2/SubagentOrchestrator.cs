@@ -24,9 +24,14 @@ public record OrchestrationResult
     public long TotalDurationMs { get; init; }
 }
 
-public class SubagentOrchestrator
+public class SubagentOrchestrator : ISubagentOrchestrator
 {
     private readonly ILlmClientFactory _clientFactory;
+
+    public SubagentOrchestrator()
+        : this(new LlmClientFactory())
+    {
+    }
 
     public SubagentOrchestrator(ILlmClient defaultClient)
         : this(new LlmClientFactory(fallbackClient: defaultClient))

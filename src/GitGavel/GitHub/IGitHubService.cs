@@ -68,4 +68,11 @@ public interface IGitHubService
         IReadOnlyList<PrCommentTriageDecision> decisions,
         GitGavelConfig config,
         CancellationToken ct = default);
+
+    Task PostPullRequestCommentAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        string commentBody,
+        CancellationToken ct = default);
 }

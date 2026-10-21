@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using GitGavel.Configuration;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
@@ -9,8 +10,10 @@ using Octokit;
 
 namespace GitGavel.GitHub;
 
-public class GitHubService : IGitHubService
+public partial class GitHubService : IGitHubService
 {
+    [GeneratedRegex(@"^@@\s*-\d+(?:,\d+)?\s*\+(\d+)(?:,\d+)?\s*@@", RegexOptions.Compiled)]
+    private static partial Regex DiffHunkHeaderRegex();
     private readonly GitHubClient _client;
     private readonly HttpClient _httpClient;
     private readonly string _token;
@@ -193,6 +196,18 @@ public class GitHubService : IGitHubService
             var reviews = await _client.PullRequest.Review.GetAll(owner, repo, prNumber);
             var reviewComments = await _client.PullRequest.ReviewComment.GetAll(owner, repo, prNumber);
 
+            var changedFiles = files.Select(f => new PullRequestChangedFile(
+                FilePath: f.FileName,
+                Status: f.Status ?? "modified",
+                Additions: f.Additions,
+                Deletions: f.Deletions,
+                Patch: f.Patch ?? ""
+            )).ToList();
+
+            var patchByPath = changedFiles
+                .GroupBy(f => f.FilePath.Replace('\\', '/').TrimStart('/'), StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Patch, StringComparer.OrdinalIgnoreCase);
+
             return new PullRequestContext
             {
                 PrNumber = pr.Number,
@@ -201,13 +216,7 @@ public class GitHubService : IGitHubService
                 BaseRef = pr.Base?.Ref ?? "main",
                 HeadRef = pr.Head?.Ref ?? "feature",
                 HeadSha = pr.Head?.Sha ?? "",
-                ChangedFiles = files.Select(f => new PullRequestChangedFile(
-                    FilePath: f.FileName,
-                    Status: f.Status ?? "modified",
-                    Additions: f.Additions,
-                    Deletions: f.Deletions,
-                    Patch: f.Patch ?? ""
-                )).ToList(),
+                ChangedFiles = changedFiles,
                 ExistingReviews = reviews.Select(r => new ExistingPrReviewSummary(
                     Id: r.Id,
                     State: r.State.StringValue,
@@ -215,14 +224,26 @@ public class GitHubService : IGitHubService
                     Author: r.User?.Login ?? "unknown",
                     SubmittedAtUtc: r.SubmittedAt.UtcDateTime
                 )).ToList(),
-                ExistingReviewComments = reviewComments.Select(rc => new ExistingPrReviewComment(
-                    Id: rc.Id,
-                    FilePath: rc.Path ?? "",
-                    Line: rc.Position,
-                    Body: rc.Body ?? "",
-                    Author: rc.User?.Login ?? "unknown",
-                    CreatedAtUtc: rc.CreatedAt.UtcDateTime
-                )).ToList()
+                ExistingReviewComments = reviewComments.Select(rc =>
+                {
+                    var rcPath = (rc.Path ?? "").Replace('\\', '/').TrimStart('/');
+                    var resolvedLine = rc.Position;
+                    if (rc.Position.HasValue &&
+                        patchByPath.TryGetValue(rcPath, out var patch) &&
+                        TryMapDiffPositionToFileLine(patch, rc.Position.Value, out var fileLine))
+                    {
+                        resolvedLine = fileLine;
+                    }
+
+                    return new ExistingPrReviewComment(
+                        Id: rc.Id,
+                        FilePath: rc.Path ?? "",
+                        Line: resolvedLine,
+                        Body: rc.Body ?? "",
+                        Author: rc.User?.Login ?? "unknown",
+                        CreatedAtUtc: rc.CreatedAt.UtcDateTime
+                    );
+                }).ToList()
             };
         }
         catch
@@ -262,15 +283,41 @@ public class GitHubService : IGitHubService
             _ => PullRequestReviewEvent.Comment
         };
 
-        var draftComments = inlineDecisions
-            .Select(d => new DraftPullRequestReviewComment(
-                IssueFormatter.FormatInlinePrComment(d),
-                d.Finding.FilePath,
-                Math.Max(1, d.Finding.StartLine)))
-            .ToList();
+        var patchByFile = prContext.ChangedFiles
+            .GroupBy(f => f.FilePath.Replace('\\', '/').TrimStart('/'), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Patch, StringComparer.OrdinalIgnoreCase);
+
+        var draftComments = new List<DraftPullRequestReviewComment>();
+        foreach (var d in inlineDecisions)
+        {
+            var normPath = d.Finding.FilePath.Replace('\\', '/').TrimStart('/');
+            if (patchByFile.TryGetValue(normPath, out var patch) &&
+                TryMapFileLineToDiffPosition(patch, d.Finding.StartLine, out var diffPos))
+            {
+                draftComments.Add(new DraftPullRequestReviewComment(
+                    IssueFormatter.FormatInlinePrComment(d),
+                    normPath,
+                    diffPos));
+            }
+        }
 
         try
         {
+            if (draftComments.Count == 0)
+            {
+                // When no new inline diff comments are being added, upsert the sticky PR summary comment in place
+                // rather than appending another top-level review event to the PR timeline.
+                var upserted = await UpsertPullRequestCommentAsync(owner, repo, prNumber, summaryBody);
+                return new PostedPrReviewResult(
+                    PrNumber: prNumber,
+                    ReviewId: upserted.Id,
+                    HtmlUrl: upserted.HtmlUrl,
+                    InlineCommentsPosted: 0,
+                    SummaryPosted: true,
+                    Verdict: "COMMENT"
+                );
+            }
+
             var reviewCreate = new PullRequestReviewCreate
             {
                 Body = summaryBody,
@@ -295,8 +342,8 @@ public class GitHubService : IGitHubService
         }
         catch
         {
-            // Fallback: if diff position validation rejects an inline comment or self-approval, post summary comment on the PR
-            var comment = await _client.Issue.Comment.Create(owner, repo, prNumber, summaryBody);
+            // Fallback: if diff position validation rejects an inline comment or self-approval, upsert summary comment on the PR
+            var comment = await UpsertPullRequestCommentAsync(owner, repo, prNumber, summaryBody);
             return new PostedPrReviewResult(
                 PrNumber: prNumber,
                 ReviewId: comment.Id,
@@ -306,6 +353,163 @@ public class GitHubService : IGitHubService
                 Verdict: "COMMENT"
             );
         }
+    }
+
+    public async Task PostPullRequestCommentAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        string commentBody,
+        CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(_token))
+        {
+            throw new InvalidOperationException("GH_TOKEN is required to post Pull Request comments on GitHub.");
+        }
+
+        await UpsertPullRequestCommentAsync(owner, repo, prNumber, commentBody);
+    }
+
+    private async Task<IssueComment> UpsertPullRequestCommentAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        string commentBody)
+    {
+        var marker = IssueFormatter.ExtractStickyCommentMarker(commentBody);
+        if (!string.IsNullOrWhiteSpace(marker))
+        {
+            try
+            {
+                var existingComments = await _client.Issue.Comment.GetAllForIssue(owner, repo, prNumber);
+                var existingMatch = existingComments.LastOrDefault(c =>
+                    c.Body != null && c.Body.Contains(marker, StringComparison.OrdinalIgnoreCase));
+
+                if (existingMatch != null)
+                {
+                    return await _client.Issue.Comment.Update(owner, repo, existingMatch.Id, commentBody);
+                }
+            }
+            catch
+            {
+                // Fall back to creating a new comment if listing/updating fails
+            }
+        }
+
+        return await _client.Issue.Comment.Create(owner, repo, prNumber, commentBody);
+    }
+
+    public static bool TryMapFileLineToDiffPosition(string? patch, int targetLine, out int position)
+    {
+        position = 0;
+        if (string.IsNullOrWhiteSpace(patch) || targetLine < 1)
+        {
+            return false;
+        }
+
+        var lines = patch.Replace("\r\n", "\n").Split('\n');
+        var currentNewLine = 0;
+        var inHunk = false;
+        var currentPos = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var match = DiffHunkHeaderRegex().Match(line);
+            if (match.Success)
+            {
+                if (inHunk)
+                {
+                    currentPos++;
+                }
+                inHunk = true;
+                currentNewLine = int.Parse(match.Groups[1].Value);
+                continue;
+            }
+
+            if (!inHunk || string.IsNullOrEmpty(line)) continue;
+
+            currentPos++;
+
+            if (line.StartsWith('+'))
+            {
+                if (currentNewLine == targetLine)
+                {
+                    position = currentPos;
+                    return true;
+                }
+                currentNewLine++;
+            }
+            else if (line.StartsWith('-'))
+            {
+                // Deleted line does not advance new file line number
+            }
+            else
+            {
+                if (currentNewLine == targetLine)
+                {
+                    position = currentPos;
+                    return true;
+                }
+                currentNewLine++;
+            }
+        }
+
+        return false;
+    }
+
+    public static bool TryMapDiffPositionToFileLine(string? patch, int diffPosition, out int fileLine)
+    {
+        fileLine = 0;
+        if (string.IsNullOrWhiteSpace(patch) || diffPosition < 1)
+        {
+            return false;
+        }
+
+        var lines = patch.Replace("\r\n", "\n").Split('\n');
+        var currentNewLine = 0;
+        var inHunk = false;
+        var currentPos = 0;
+
+        for (var i = 0; i < lines.Length; i++)
+        {
+            var line = lines[i];
+            var match = DiffHunkHeaderRegex().Match(line);
+            if (match.Success)
+            {
+                if (inHunk)
+                {
+                    currentPos++;
+                }
+                inHunk = true;
+                currentNewLine = int.Parse(match.Groups[1].Value);
+                continue;
+            }
+
+            if (!inHunk || string.IsNullOrEmpty(line)) continue;
+
+            currentPos++;
+
+            if (line.StartsWith('-'))
+            {
+                if (currentPos == diffPosition)
+                {
+                    fileLine = currentNewLine;
+                    return true;
+                }
+            }
+            else
+            {
+                if (currentPos == diffPosition)
+                {
+                    fileLine = currentNewLine;
+                    return true;
+                }
+                currentNewLine++;
+            }
+        }
+
+        return false;
     }
 
     private async Task SyncNodeToProjectV2Async(

@@ -26,6 +26,7 @@ public class SecurityAuditorAgent : ISubagent
         if (context.IsPullRequestMode && context.ActivePullRequest != null)
         {
             promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+            promptBuilder.AppendLine("ANTI-SCOPE-CREEP RULE: Only report exploitable Critical, High, or Medium security vulnerabilities directly introduced in this PR diff. Do NOT flag test files (*Tests.cs) or theoretical low-severity nits; return [] if no substantive vulnerabilities exist.");
         }
 
         if (context.SarifFindings.Count > 0)
@@ -40,15 +41,15 @@ public class SecurityAuditorAgent : ISubagent
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Source Code Files Under Audit:");
-        foreach (var src in context.SourceFiles.Take(12))
+        foreach (var src in context.SourceFiles)
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
             if (!string.IsNullOrWhiteSpace(src.DiffPatch))
             {
                 promptBuilder.AppendLine("PR Diff Patch:");
-                promptBuilder.AppendLine(src.DiffPatch.Length > 3000 ? src.DiffPatch[..3000] + "\n...(truncated)" : src.DiffPatch);
+                promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
             }
-            promptBuilder.AppendLine(src.Content.Length > 3000 ? src.Content[..3000] + "\n...(truncated)" : src.Content);
+            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
         }
 
         promptBuilder.AppendLine();
