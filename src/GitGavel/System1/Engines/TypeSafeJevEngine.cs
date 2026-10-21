@@ -41,6 +41,24 @@ public class TypeSafeJevEngine : ITriageEngine
         {
             foreach (var issue in existingIssues)
             {
+                var metadata = GitGavel.GitHub.IssueFormatter.ParseMetadata(issue.Body);
+                if (metadata != null && string.Equals(metadata.Fingerprint, finding.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new TriageDecision
+                    {
+                        Finding = finding,
+                        IsDuplicate = true,
+                        DuplicateOfIssueNumber = issue.Number,
+                        DuplicateProbability = 1.0,
+                        JevScore = 1.0,
+                        PriorityLabel = "P3",
+                        TargetColumn = "Discard",
+                        Confidence = 1.0,
+                        Status = TriageStatus.SuppressedDuplicate,
+                        Reason = $"Exact fingerprint duplicate of existing issue #{issue.Number}"
+                    };
+                }
+
                 var dedupeState = JsonContent.From(new
                 {
                     candidate = new
@@ -75,11 +93,6 @@ public class TypeSafeJevEngine : ITriageEngine
                 var noul = dedupeResp.Noul("is_duplicate");
                 var prob = noul?.Noul ?? 0.0;
 
-                if (prob > maxDuplicateProb)
-                {
-                    maxDuplicateProb = prob;
-                }
-
                 if (prob >= thresholds.AutoBacklogConfidence) // >= 0.85 -> Definite Duplicate
                 {
                     duplicateIssueNum = issue.Number;
@@ -98,10 +111,14 @@ public class TypeSafeJevEngine : ITriageEngine
                     };
                 }
 
-                if (prob > (1.0 - thresholds.AutoBacklogConfidence) && prob < thresholds.AutoBacklogConfidence)
+                if (prob > maxDuplicateProb)
                 {
-                    // Between 0.15 and 0.85 -> Borderline / Uncertain match
-                    uncertainMatchIssueNum = issue.Number;
+                    maxDuplicateProb = prob;
+                    if (prob >= thresholds.HumanReviewConfidence && prob < thresholds.AutoBacklogConfidence)
+                    {
+                        // Between HumanReviewConfidence (0.50/0.60) and AutoBacklogConfidence (0.85) -> Borderline / Uncertain match
+                        uncertainMatchIssueNum = issue.Number;
+                    }
                 }
             }
         }
@@ -166,9 +183,27 @@ public class TypeSafeJevEngine : ITriageEngine
             _ => "P3"
         };
 
-        // If deduplication found an uncertain match (0.15 < P < 0.85), route to human review
+        // If deduplication found an uncertain match (HumanReviewConfidence <= P < AutoBacklogConfidence):
+        // Suppress P3 duplicates directly; route P0-P2 borderline matches to human review.
         if (uncertainMatchIssueNum.HasValue && selectedChoice != "Discard")
         {
+            if (priorityLabel == "P3")
+            {
+                return new TriageDecision
+                {
+                    Finding = finding,
+                    IsDuplicate = true,
+                    DuplicateOfIssueNumber = uncertainMatchIssueNum,
+                    DuplicateProbability = maxDuplicateProb,
+                    JevScore = calibratedScore,
+                    PriorityLabel = priorityLabel,
+                    TargetColumn = "Discard",
+                    Confidence = maxDuplicateProb,
+                    Status = TriageStatus.SuppressedDuplicate,
+                    Reason = $"Suppressed P3 duplicate of existing issue #{uncertainMatchIssueNum} (P={maxDuplicateProb:P0} >= {thresholds.HumanReviewConfidence:P0})"
+                };
+            }
+
             return new TriageDecision
             {
                 Finding = finding,
@@ -226,22 +261,32 @@ public class TypeSafeJevEngine : ITriageEngine
             decisions.Add(decision);
         }
 
-        // Enforce maxIssuesPerRun safety cap on Backlog tickets
-        var accepted = decisions.Where(d => d.Status == TriageStatus.AcceptedToBacklog).ToList();
-        if (accepted.Count > config.Triage.MaxIssuesPerRun)
+        // Enforce maxIssuesPerRun safety cap on P3 issues (P0, P1, and P2 do not count toward the cap)
+        var cappedCandidates = decisions
+            .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
+                        d.PriorityLabel == "P3")
+            .ToList();
+
+        if (cappedCandidates.Count > config.Triage.MaxIssuesPerRun)
         {
-            // Keep top N by JevScore descending
-            var topAccepted = accepted.OrderByDescending(d => d.JevScore).Take(config.Triage.MaxIssuesPerRun).ToHashSet();
+            var topAllowed = cappedCandidates
+                .OrderByDescending(d => d.JevScore)
+                .ThenByDescending(d => d.Confidence)
+                .Take(config.Triage.MaxIssuesPerRun)
+                .ToHashSet();
+
             for (var i = 0; i < decisions.Count; i++)
             {
                 var d = decisions[i];
-                if (d.Status == TriageStatus.AcceptedToBacklog && !topAccepted.Contains(d))
+                if (d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
+                    d.PriorityLabel == "P3" &&
+                    !topAllowed.Contains(d))
                 {
                     decisions[i] = d with
                     {
-                        Status = TriageStatus.RoutedToHumanReview,
-                        TargetColumn = "NeedsHumanReview",
-                        Reason = $"Deferred to AI Triage review: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached."
+                        Status = TriageStatus.DiscardedNoise,
+                        TargetColumn = "Discard",
+                        Reason = $"Deferred: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached for P3 findings (P0–P2 exempt)."
                     };
                 }
             }

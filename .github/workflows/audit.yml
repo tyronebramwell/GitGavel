@@ -1,6 +1,8 @@
 name: "GitGavel AI Repo & PR Audit"
 
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '0 3 * * 1'
   pull_request:

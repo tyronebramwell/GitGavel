@@ -114,20 +114,31 @@ public class MockTriageEngine : ITriageEngine
             decisions.Add(d);
         }
 
-        var accepted = decisions.Where(d => d.Status == TriageStatus.AcceptedToBacklog).ToList();
-        if (accepted.Count > config.Triage.MaxIssuesPerRun)
+        var cappedCandidates = decisions
+            .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
+                        d.PriorityLabel == "P3")
+            .ToList();
+
+        if (cappedCandidates.Count > config.Triage.MaxIssuesPerRun)
         {
-            var top = accepted.OrderByDescending(d => d.JevScore).Take(config.Triage.MaxIssuesPerRun).ToHashSet();
+            var topAllowed = cappedCandidates
+                .OrderByDescending(d => d.JevScore)
+                .ThenByDescending(d => d.Confidence)
+                .Take(config.Triage.MaxIssuesPerRun)
+                .ToHashSet();
+
             for (var i = 0; i < decisions.Count; i++)
             {
                 var d = decisions[i];
-                if (d.Status == TriageStatus.AcceptedToBacklog && !top.Contains(d))
+                if (d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
+                    d.PriorityLabel == "P3" &&
+                    !topAllowed.Contains(d))
                 {
                     decisions[i] = d with
                     {
-                        Status = TriageStatus.RoutedToHumanReview,
-                        TargetColumn = "NeedsHumanReview",
-                        Reason = $"Deferred to AI Triage review: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached."
+                        Status = TriageStatus.DiscardedNoise,
+                        TargetColumn = "Discard",
+                        Reason = $"Deferred: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached for P3 findings (P0–P2 exempt)."
                     };
                 }
             }
