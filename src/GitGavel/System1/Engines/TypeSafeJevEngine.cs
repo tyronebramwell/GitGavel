@@ -264,9 +264,27 @@ public class TypeSafeJevEngine : ITriageEngine
             long? dupId = null;
             var maxProb = 0.0;
 
-            if (config.Triage.Jev.DedupeWithNoul && config.Github.PullRequests.AuditExistingReviews && existingComments.Count > 0)
+            if (config.Github.PullRequests.AuditExistingReviews && existingComments.Count > 0)
             {
-                foreach (var existing in existingComments)
+                var exactDup = existingComments.FirstOrDefault(e =>
+                    e.FilePath.Replace('\\', '/').TrimStart('/').Equals(finding.FilePath.Replace('\\', '/').TrimStart('/'), StringComparison.OrdinalIgnoreCase) &&
+                    (e.Body.Contains(finding.Title, StringComparison.OrdinalIgnoreCase) ||
+                     (e.Line.HasValue && Math.Abs(e.Line.Value - finding.StartLine) <= 3 && e.Body.Contains($"| {finding.Category}]", StringComparison.OrdinalIgnoreCase))));
+
+                if (exactDup != null)
+                {
+                    dupId = exactDup.Id;
+                    maxProb = 1.0;
+                }
+            }
+
+            if (!dupId.HasValue && config.Triage.Jev.DedupeWithNoul && config.Github.PullRequests.AuditExistingReviews && existingComments.Count > 0)
+            {
+                var sameFileComments = existingComments
+                    .Where(e => e.FilePath.Replace('\\', '/').TrimStart('/').Equals(finding.FilePath.Replace('\\', '/').TrimStart('/'), StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var existing in sameFileComments)
                 {
                     var dedupeState = JsonContent.From(new
                     {
@@ -327,6 +345,22 @@ public class TypeSafeJevEngine : ITriageEngine
                 continue;
             }
 
+            if (finding.Severity.Equals("Low", StringComparison.OrdinalIgnoreCase))
+            {
+                decisions.Add(new PrCommentTriageDecision
+                {
+                    Finding = finding,
+                    IsDuplicate = false,
+                    DuplicateProbability = maxProb,
+                    JevScore = 1.5,
+                    PriorityLabel = "P3",
+                    Action = PrCommentAction.Discard,
+                    Confidence = 0.95,
+                    Reason = "Suppressed low-severity P3 nitpick in PR review mode to prevent scope creep."
+                });
+                continue;
+            }
+
             var evalState = JsonContent.From(new
             {
                 comment = new
@@ -378,12 +412,14 @@ public class TypeSafeJevEngine : ITriageEngine
                 _ => "P3"
             };
 
-            var action = choiceStr switch
-            {
-                "PostInlineReview" => PrCommentAction.PostInlineReview,
-                "SummaryCommentOnly" => PrCommentAction.SummaryCommentOnly,
-                _ => PrCommentAction.Discard
-            };
+            var action = prio == "P3"
+                ? PrCommentAction.Discard
+                : choiceStr switch
+                {
+                    "PostInlineReview" => PrCommentAction.PostInlineReview,
+                    "SummaryCommentOnly" => PrCommentAction.SummaryCommentOnly,
+                    _ => PrCommentAction.Discard
+                };
 
             decisions.Add(new PrCommentTriageDecision
             {
@@ -394,16 +430,19 @@ public class TypeSafeJevEngine : ITriageEngine
                 PriorityLabel = prio,
                 Action = action,
                 Confidence = confidence,
-                Reason = $"Jev Choice '{choiceStr}' ({confidence:P0}, Score: {calibratedScore:F1}/5.0)"
+                Reason = prio == "P3"
+                    ? $"Suppressed P3 nitpick (Score: {calibratedScore:F1}/5.0) to prevent PR scope creep."
+                    : $"Jev Choice '{choiceStr}' ({confidence:P0}, Score: {calibratedScore:F1}/5.0)"
             });
         }
 
-        // Enforce MaxInlineCommentsPerPr cap
+        // Enforce MaxInlineCommentsPerPr cap across the PR lifecycle
         var maxInline = config.Github.PullRequests.MaxInlineCommentsPerPr;
+        var remainingInlineBudget = Math.Max(0, maxInline - existingComments.Count);
         var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
-        if (maxInline > 0 && inlineAccepted.Count > maxInline)
+        if (maxInline > 0 && inlineAccepted.Count > remainingInlineBudget)
         {
-            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(maxInline).ToHashSet();
+            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(remainingInlineBudget).ToHashSet();
             for (var i = 0; i < decisions.Count; i++)
             {
                 var d = decisions[i];

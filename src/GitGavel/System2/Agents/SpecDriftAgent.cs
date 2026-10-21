@@ -37,6 +37,7 @@ public class SpecDriftAgent : ISubagent
         if (context.IsPullRequestMode && context.ActivePullRequest != null)
         {
             promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+            promptBuilder.AppendLine("ANTI-SCOPE-CREEP RULE: Only report Critical, High, or Medium severity specification contradictions introduced by this PR. Do NOT report Low-severity nits, test file details, or compliant changes; return [] if no substantive spec drift exists.");
         }
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Specification Documents:");

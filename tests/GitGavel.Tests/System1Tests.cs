@@ -265,4 +265,67 @@ public class System1Tests
         decisions[0].DuplicateOfCommentId.Should().Be(555);
         decisions[0].Action.Should().Be(PrCommentAction.Discard);
     }
+
+    [Fact]
+    public async Task JevEngine_TriagePrReviewComments_SuppressesLowSeverityAndEnforcesLifecycleInlineBudget()
+    {
+        var mockJev = new Mock<IJevClient>();
+
+        var scoreHighResp = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["priority_score"] = new ScoreAnswer
+                {
+                    Score = 4.2,
+                    Confidence = 0.95,
+                    Legend = new Dictionary<int, System.Text.Json.Nodes.JsonNode?> { [1] = null },
+                    Probabilities = new Dictionary<int, double> { [1] = 1.0 }
+                },
+                ["pr_route_choice"] = new ChoiceAnswer
+                {
+                    Choice = "PostInlineReview",
+                    Confidence = 0.95,
+                    Probabilities = new Dictionary<string, double> { ["PostInlineReview"] = 0.95 }
+                }
+            }
+        };
+
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.Is<IReadOnlyDictionary<string, Question>>(q => q.ContainsKey("pr_route_choice")),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(scoreHighResp);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var config = new GitGavelConfig
+        {
+            Github = new GitHubConfig
+            {
+                PullRequests = new PullRequestsConfig { MaxInlineCommentsPerPr = 2 }
+            }
+        };
+
+        var findings = new List<FindingCandidate>
+        {
+            CreateFinding("Low severity style nitpick", "Refactoring", "Low", "src/App.cs"),
+            CreateFinding("High severity bug 1", "Security", "High", "src/Auth.cs"),
+            CreateFinding("High severity bug 2", "Security", "High", "src/Token.cs")
+        };
+
+        // 1 existing comment means remaining inline budget is 2 - 1 = 1
+        var existingComments = new List<ExistingPrReviewComment>
+        {
+            new(100, "src/Other.cs", 12, "Prior review comment", "gitgavel", DateTime.UtcNow)
+        };
+
+        var decisions = await engine.TriagePrReviewCommentsAsync(findings, existingComments, config);
+
+        decisions.Should().HaveCount(3);
+        decisions.Single(d => d.Finding.Title == "Low severity style nitpick").Action.Should().Be(PrCommentAction.Discard);
+        decisions.Count(d => d.Action == PrCommentAction.PostInlineReview).Should().Be(1);
+        decisions.Count(d => d.Action == PrCommentAction.SummaryCommentOnly).Should().Be(1);
+    }
 }

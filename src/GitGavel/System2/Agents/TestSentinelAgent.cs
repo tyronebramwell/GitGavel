@@ -38,6 +38,7 @@ public class TestSentinelAgent : ISubagent
         if (context.IsPullRequestMode && context.ActivePullRequest != null)
         {
             promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+            promptBuilder.AppendLine("ANTI-SCOPE-CREEP RULE: Only report High or Medium severity missing tests for completely untested production logic introduced in this PR. If the PR already includes unit/integration tests for the modified production methods, return []. Do NOT request tests for trivial constructors, getters, or tests for existing tests.");
         }
         promptBuilder.AppendLine("Identify:");
         promptBuilder.AppendLine("1. Missing Test Detection (MissingTest): critical production classes, public methods, business rules, or error paths lacking Unit, Integration, or E2E coverage.");

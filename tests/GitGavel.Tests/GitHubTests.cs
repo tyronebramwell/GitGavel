@@ -582,4 +582,51 @@ public class GitHubTests
             mock.PostedPrComments.Should().ContainSingle();
         }
     }
+
+    [Fact]
+    public void GitHubService_TryMapDiffPositionToFileLine_MapsDiffOffsetBackToNewFileLine()
+    {
+        var patch = string.Join("\n",
+            "@@ -10,4 +10,5 @@ public class Sample",
+            " line10",
+            "-oldLine11",
+            "+newLine11",
+            "+newLine12",
+            " line13");
+
+        GitHubService.TryMapDiffPositionToFileLine(patch, 1, out var line10).Should().BeTrue();
+        line10.Should().Be(10);
+
+        // Position 2 is deleted line ('-'), maps to adjacent new file line 11
+        GitHubService.TryMapDiffPositionToFileLine(patch, 2, out var delLine).Should().BeTrue();
+        delLine.Should().Be(11);
+
+        // Position 3 is '+newLine11' -> line 11
+        GitHubService.TryMapDiffPositionToFileLine(patch, 3, out var line11).Should().BeTrue();
+        line11.Should().Be(11);
+
+        // Position 4 is '+newLine12' -> line 12
+        GitHubService.TryMapDiffPositionToFileLine(patch, 4, out var line12).Should().BeTrue();
+        line12.Should().Be(12);
+
+        // Out of range position returns false
+        GitHubService.TryMapDiffPositionToFileLine(patch, 99, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task MockGitHubService_PostPullRequestCommentAsync_UpsertsStickyComment()
+    {
+        var mock = new MockGitHubService();
+
+        await mock.PostPullRequestCommentAsync(
+            "my-org", "my-repo", 32,
+            "<!-- gitgavel-sticky-comment:domain-security -->\nFirst report");
+
+        await mock.PostPullRequestCommentAsync(
+            "my-org", "my-repo", 32,
+            "<!-- gitgavel-sticky-comment:domain-security -->\nUpdated report");
+
+        mock.PostedPrComments.Should().ContainSingle();
+        mock.PostedPrComments[0].CommentBody.Should().Contain("Updated report");
+    }
 }

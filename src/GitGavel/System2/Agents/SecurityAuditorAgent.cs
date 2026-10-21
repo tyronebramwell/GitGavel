@@ -26,6 +26,7 @@ public class SecurityAuditorAgent : ISubagent
         if (context.IsPullRequestMode && context.ActivePullRequest != null)
         {
             promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+            promptBuilder.AppendLine("ANTI-SCOPE-CREEP RULE: Only report exploitable Critical, High, or Medium security vulnerabilities directly introduced in this PR diff. Do NOT flag test files (*Tests.cs) or theoretical low-severity nits; return [] if no substantive vulnerabilities exist.");
         }
 
         if (context.SarifFindings.Count > 0)
