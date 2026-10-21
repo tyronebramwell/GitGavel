@@ -623,4 +623,67 @@ public class System2Tests
             capturedPrompts[0].Should().NotContain("...(truncated)");
         }
     }
+
+    [Fact]
+    public async Task IssueResolutionAgent_FiltersOutUnresolvedItemsAndAttributesHeadCommitWhenShasOmitted()
+    {
+        var mockClient = new MockLlmClient(_ => new LlmResponse
+        {
+            Content = """
+            [
+              {
+                "issueNumber": 2,
+                "issueTitle": "Missing Implementation of Jev Decision Engine (System 1)",
+                "isResolved": true,
+                "howItWasFixed": "TypeSafeJevEngine was implemented with Noul, Score, and Choice primitives.",
+                "resolvingCommitShas": []
+              },
+              {
+                "issueNumber": 99,
+                "issueTitle": "Unresolved Future Feature",
+                "isResolved": false,
+                "howItWasFixed": "",
+                "resolvingCommitShas": []
+              }
+            ]
+            """,
+            PromptTokens = 50,
+            CompletionTokens = 25,
+            DurationMs = 5,
+            ModelUsed = "gemini-2.5-flash"
+        });
+
+        var agent = new IssueResolutionAgent(mockClient);
+        var repoCtx = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = [],
+            RecentCommits =
+            [
+                new GitCommitRecord(
+                    "67d3429273714987ff04e9a131cdff44503c7d41",
+                    "67d3429",
+                    "feat: implement Phase 2 System 1 Jev Triage Engine",
+                    "Tyrone",
+                    "2026-10-20T12:00:00Z",
+                    ["src/GitGavel/System1/Engines/TypeSafeJevEngine.cs"])
+            ]
+        };
+
+        var openIssues = new List<ExistingIssue>
+        {
+            new(2, "Missing Implementation of Jev Decision Engine (System 1)", "Body", "open"),
+            new(99, "Unresolved Future Feature", "Body", "open")
+        };
+
+        var result = await agent.EvaluateOpenIssuesAsync(openIssues, repoCtx);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Candidates.Should().ContainSingle();
+        result.Candidates[0].IssueNumber.Should().Be(2);
+        result.Candidates[0].ResolvingCommitShas.Should().ContainSingle().Which.Should().Be("67d3429273714987ff04e9a131cdff44503c7d41");
+        result.Candidates[0].ResolvingCommitSummaries.Should().ContainSingle().Which.Should().Contain("`67d3429`");
+    }
 }

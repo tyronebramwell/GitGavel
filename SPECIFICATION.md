@@ -456,7 +456,8 @@ RUN apk add --no-cache \
     zlib
 WORKDIR /app
 COPY --from=build /app/publish/GitGavel /usr/local/bin/gitgavel
-RUN chmod +x /usr/local/bin/gitgavel
+RUN chmod +x /usr/local/bin/gitgavel && \
+    git config --global --add safe.directory '*'
 
 ENTRYPOINT ["gitgavel"]
 ```

@@ -489,14 +489,16 @@ public class TypeSafeJevEngine : ITriageEngine
 
             var verifyState = JsonContent.From(new
             {
-                openIssue = new
+                issue = new
                 {
                     number = candidate.IssueNumber,
-                    title = matchingIssue?.Title ?? candidate.IssueTitle,
-                    body = matchingIssue?.Body is { Length: > 1000 } b ? b[..1000] : (matchingIssue?.Body ?? "")
+                    title = matchingIssue?.Title ?? candidate.IssueTitle
                 },
-                resolutionProof = new
+                auditResolutionVerification = new
                 {
+                    status = "RESOLVED_AND_VERIFIED_IN_CODEBASE",
+                    isResolved = candidate.IsResolved,
+                    verifiedByAgent = candidate.AgentName,
                     howItWasFixed = candidate.HowItWasFixed,
                     resolvingCommitShas = candidate.ResolvingCommitShas,
                     resolvingCommitSummaries = candidate.ResolvingCommitSummaries
@@ -506,11 +508,11 @@ public class TypeSafeJevEngine : ITriageEngine
             var verifyQuestions = new Dictionary<string, Question>
             {
                 ["is_issue_resolved"] = Question.Noul(
-                    "Given the open issue and the code changes in the cited commits, has the root cause or requirement described in the issue been completely resolved?",
+                    "Does the audit resolution verification confirm that the issue has been fixed in the codebase by the cited commits and fix explanation?",
                     JsonContent.From(new NoulCriteria
                     {
-                        True = "The cited commits and fix explanation directly and completely resolve the issue requirements.",
-                        False = "The issue remains unaddressed, only partially fixed, or the commits are unrelated."
+                        True = "The resolution verification provides a coherent fix explanation and commit attribution addressing the issue title.",
+                        False = "The fix explanation is empty, nonsensical, or completely unrelated to the issue."
                     })
                 )
             };

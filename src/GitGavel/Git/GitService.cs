@@ -178,7 +178,7 @@ public class GitService : IGitService
             var psi = new ProcessStartInfo
             {
                 FileName = "git",
-                Arguments = args,
+                Arguments = $"-c safe.directory=* {args}",
                 WorkingDirectory = workingDirectory,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
@@ -190,7 +190,7 @@ public class GitService : IGitService
             if (process == null) return null;
 
             var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(2000);
+            process.WaitForExit(5000);
             return process.ExitCode == 0 ? output.Trim() : null;
         }
         catch
