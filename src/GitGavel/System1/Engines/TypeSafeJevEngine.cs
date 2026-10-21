@@ -509,11 +509,8 @@ public class TypeSafeJevEngine : ITriageEngine
             {
                 ["is_issue_resolved"] = Question.Noul(
                     "Does the audit resolution verification confirm that the issue has been fixed in the codebase by the cited commits and fix explanation?",
-                    JsonContent.From(new NoulCriteria
-                    {
-                        True = "The resolution verification provides a coherent fix explanation and commit attribution addressing the issue title.",
-                        False = "The fix explanation is empty, nonsensical, or completely unrelated to the issue."
-                    })
+                    "The resolution verification provides a coherent fix explanation and commit attribution addressing the issue title.",
+                    "The fix explanation is empty, nonsensical, or completely unrelated to the issue."
                 )
             };
 

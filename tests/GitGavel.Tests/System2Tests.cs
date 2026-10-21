@@ -11,6 +11,7 @@ using GitGavel.System2.Providers;
 
 namespace GitGavel.Tests;
 
+[Collection("EnvironmentVariables")]
 public class System2Tests
 {
     [Fact]
@@ -685,5 +686,90 @@ public class System2Tests
         result.Candidates[0].IssueNumber.Should().Be(2);
         result.Candidates[0].ResolvingCommitShas.Should().ContainSingle().Which.Should().Be("67d3429273714987ff04e9a131cdff44503c7d41");
         result.Candidates[0].ResolvingCommitSummaries.Should().ContainSingle().Which.Should().Contain("`67d3429`");
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("test-gh-token-dryrun", false)]
+    public async Task AuditCommand_DryRunAndZeroFindings_ResolvesGitHubServiceByTokenAndPassesFullRepoContextToIssueResolution(
+        string? ghTokenValue,
+        bool useMockFlag)
+    {
+        var prevGh = Environment.GetEnvironmentVariable("GH_TOKEN");
+        var prevGithub = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+
+        RepoContext? capturedRunAllContext = null;
+        RepoContext? capturedIssueResContext = null;
+
+        var mockOrchestrator = new Moq.Mock<ISubagentOrchestrator>();
+        mockOrchestrator
+            .Setup(o => o.RunAllAsync(Moq.It.IsAny<RepoContext>(), Moq.It.IsAny<GitGavelConfig>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback<RepoContext, GitGavelConfig, CancellationToken>((ctx, _, _) => capturedRunAllContext = ctx)
+            .Returns(Task.FromResult(new OrchestrationResult { AllFindings = [], SubagentResults = [] }));
+
+        mockOrchestrator
+            .Setup(o => o.EvaluateIssueResolutionsAsync(
+                Moq.It.IsAny<IReadOnlyList<ExistingIssue>>(),
+                Moq.It.IsAny<RepoContext>(),
+                Moq.It.IsAny<GitGavelConfig>(),
+                Moq.It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyList<ExistingIssue>, RepoContext, GitGavelConfig, CancellationToken>((_, ctx, _, _) => capturedIssueResContext = ctx)
+            .Returns(Task.FromResult(new IssueResolutionAgentResult
+            {
+                AgentName = "IssueResolutionAuditor",
+                Candidates =
+                [
+                    new IssueResolutionCandidate
+                    {
+                        IssueNumber = 101,
+                        IssueTitle = "Isolate CI environment variables in GitService fallback test",
+                        IsResolved = true,
+                        HowItWasFixed = "Cleared CI env vars in GitServiceTests",
+                        ResolvingCommitShas = ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"]
+                    }
+                ],
+                IsSuccess = true
+            }));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_dryrun_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+        await File.WriteAllTextAsync(Path.Combine(tempDir, "src", "UnchangedFile.cs"), "public class UnchangedFile {}");
+        await File.WriteAllTextAsync(Path.Combine(tempDir, ".gitgavel.yml"), "triage:\n  engine: llm-synthesizer\n");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", ghTokenValue);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+
+            var cmd = new GitGavel.Commands.AuditCommand(orchestrator: mockOrchestrator.Object);
+            var remaining = new Moq.Mock<Spectre.Console.Cli.IRemainingArguments>();
+            var cmdCtx = new Spectre.Console.Cli.CommandContext([], remaining.Object, "audit", null);
+            var settings = new GitGavel.Commands.AuditCommand.Settings
+            {
+                RepoDirectory = tempDir,
+                DryRun = true,
+                UseMock = useMockFlag,
+                PullRequestNumber = useMockFlag ? 42 : null
+            };
+
+            var exitCode = await cmd.ExecuteAsync(cmdCtx, settings, CancellationToken.None);
+
+            exitCode.Should().Be(0);
+            capturedRunAllContext.Should().NotBeNull();
+
+            if (useMockFlag)
+            {
+                // In PR mode, RunAllAsync receives PR-scoped context while EvaluateIssueResolutionsAsync receives fullRepoContext (including UnchangedFile.cs)
+                capturedRunAllContext!.IsPullRequestMode.Should().BeTrue();
+                capturedIssueResContext.Should().NotBeNull();
+                capturedIssueResContext!.SourceFiles.Should().Contain(f => f.RelativePath.Contains("UnchangedFile.cs"));
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", prevGh);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", prevGithub);
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
     }
 }

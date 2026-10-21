@@ -148,4 +148,14 @@ public class GitServiceTests
             Environment.SetEnvironmentVariable("GITHUB_REF", prevRef);
         }
     }
+
+    [Fact]
+    public void GitService_RunGitCommand_AppliesSafeDirectoryConfigurationFlag()
+    {
+        var gitService = new GitService();
+        var output = gitService.RunGitCommand(Directory.GetCurrentDirectory(), "config --get-all safe.directory");
+
+        output.Should().NotBeNullOrWhiteSpace();
+        output!.Split('\n', StringSplitOptions.TrimEntries).Should().Contain("*");
+    }
 }

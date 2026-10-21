@@ -169,9 +169,12 @@ public class System1Tests
     }
 
     [Fact]
-    public async Task JevEngine_VerifyIssueResolutions_WhenNoulHighConfidence_ClosesResolvedIssue()
+    public async Task JevEngine_VerifyIssueResolutions_WhenNoulHighConfidence_ClosesResolvedIssueAndSendsCalibratedPayload()
     {
         var mockJev = new Mock<IJevClient>();
+        JsonContent? capturedState = null;
+        IReadOnlyDictionary<string, Question>? capturedQuestions = null;
+
         var verifyResp = new SystemOneResponse
         {
             Answers = new Dictionary<string, Answer>
@@ -185,6 +188,11 @@ public class System1Tests
             It.Is<IReadOnlyDictionary<string, Question>>(q => q.ContainsKey("is_issue_resolved")),
             It.IsAny<JevRequestOptions>(),
             It.IsAny<CancellationToken>()))
+            .Callback<JsonContent, IReadOnlyDictionary<string, Question>, JevRequestOptions?, CancellationToken>((s, q, _, _) =>
+            {
+                capturedState = s;
+                capturedQuestions = q;
+            })
             .ReturnsAsync(verifyResp);
 
         var engine = new TypeSafeJevEngine(mockJev.Object);
@@ -197,7 +205,8 @@ public class System1Tests
                 IssueTitle = "Fix GitService fallback test",
                 IsResolved = true,
                 HowItWasFixed = "Isolated CI env vars in GitServiceTests",
-                ResolvingCommitShas = ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"]
+                ResolvingCommitShas = ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"],
+                ResolvingCommitSummaries = ["`cfad09a` — *fix(tests): isolate CI environment variables in GitService fallback test*"]
             }
         };
 
@@ -213,6 +222,80 @@ public class System1Tests
         decisions[0].ResolutionProbability.Should().Be(0.96);
         decisions[0].Action.Should().Be(IssueResolutionAction.CloseResolved);
         decisions[0].TargetColumn.Should().Be("Done");
+
+        capturedState.Should().NotBeNull();
+        var stateJson = capturedState!.Value.ToString();
+        stateJson.Should().Contain("\"issue\"");
+        stateJson.Should().Contain("\"audit_resolution_verification\"");
+        stateJson.Should().Contain("\"RESOLVED_AND_VERIFIED_IN_CODEBASE\"");
+        stateJson.Should().Contain("IssueResolutionAuditor");
+        stateJson.Should().Contain("Isolated CI env vars in GitServiceTests");
+
+        capturedQuestions.Should().NotBeNull();
+        var noulQuestion = capturedQuestions!["is_issue_resolved"].Should().BeOfType<NoulQuestion>().Subject;
+        var questionJson = noulQuestion.Instructions.ToString() + " | " + noulQuestion.Criteria?.True.ToString() + " | " + noulQuestion.Criteria?.False.ToString();
+        questionJson.Should().Contain("Does the audit resolution verification confirm that the issue has been fixed in the codebase by the cited commits and fix explanation?");
+        questionJson.Should().Contain("The resolution verification provides a coherent fix explanation and commit attribution addressing the issue title.");
+        questionJson.Should().Contain("The fix explanation is empty, nonsensical, or completely unrelated to the issue.");
+    }
+
+    [Theory]
+    [InlineData(0.75, IssueResolutionAction.CommentProgress, "AI Triage")]
+    [InlineData(0.40, IssueResolutionAction.LeaveOpen, "Backlog")]
+    public async Task JevEngine_VerifyIssueResolutions_HandlesPartialAndLowConfidenceThresholds(
+        double probability,
+        IssueResolutionAction expectedAction,
+        string expectedColumn)
+    {
+        var mockJev = new Mock<IJevClient>();
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.Is<IReadOnlyDictionary<string, Question>>(q => q.ContainsKey("is_issue_resolved")),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(new SystemOneResponse
+            {
+                Answers = new Dictionary<string, Answer>
+                {
+                    ["is_issue_resolved"] = new NoulAnswer { Noul = probability }
+                }
+            });
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+        var candidates = new List<IssueResolutionCandidate>
+        {
+            new()
+            {
+                IssueNumber = 10,
+                IssueTitle = "Partial Issue",
+                IsResolved = true,
+                HowItWasFixed = "Partial work",
+                ResolvingCommitShas = ["abc1234"]
+            }
+        };
+
+        var UnresolvedCandidate = new IssueResolutionCandidate
+        {
+            IssueNumber = 11,
+            IssueTitle = "Unresolved Issue",
+            IsResolved = false,
+            HowItWasFixed = "",
+            ResolvingCommitShas = []
+        };
+
+        var decisions = await engine.VerifyIssueResolutionsAsync(
+            [candidates[0], UnresolvedCandidate],
+            [new ExistingIssue(10, "Partial Issue", "Body", "open")],
+            _config);
+
+        decisions.Should().HaveCount(2);
+        decisions[0].VerifiedResolved.Should().BeFalse();
+        decisions[0].Action.Should().Be(expectedAction);
+        decisions[0].TargetColumn.Should().Be(expectedColumn);
+
+        decisions[1].VerifiedResolved.Should().BeFalse();
+        decisions[1].Action.Should().Be(IssueResolutionAction.LeaveOpen);
+        decisions[1].ResolutionProbability.Should().Be(0.0);
     }
 
     [Fact]
