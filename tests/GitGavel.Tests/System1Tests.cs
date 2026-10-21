@@ -221,6 +221,141 @@ public class System1Tests
     }
 
     [Fact]
+    public async Task JevEngine_WhenExactFingerprintMatchesExistingIssue_SuppressesWithoutCallingJev()
+    {
+        var mockJev = new Mock<IJevClient>(MockBehavior.Strict);
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var finding = CreateFinding("Extract interface", "Refactoring", "Medium", "Services/OrderService.cs");
+        var existingBody = $"""
+            ## ⚠️ Summary
+            Summary for Extract interface
+
+            ---
+            <!-- gitgavel-metadata
+            fingerprint: {finding.Fingerprint}
+            category: Refactoring
+            jev_score: 3.0
+            jev_confidence: 0.90
+            agent: RefactoringAgent
+            created_at: 2026-10-21T12:00:00Z
+            -->
+            """;
+
+        var existingIssues = new List<ExistingIssue>
+        {
+            new(77, "Extract interface", existingBody)
+        };
+
+        var decision = await engine.EvaluateFindingAsync(finding, existingIssues, _config);
+
+        decision.IsDuplicate.Should().BeTrue();
+        decision.DuplicateOfIssueNumber.Should().Be(77);
+        decision.DuplicateProbability.Should().Be(1.0);
+        decision.Status.Should().Be(TriageStatus.SuppressedDuplicate);
+        decision.TargetColumn.Should().Be("Discard");
+        mockJev.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task JevEngine_WhenP3FindingHasUncertainDuplicateMatch_SuppressesAsDuplicate()
+    {
+        var mockJev = new Mock<IJevClient>();
+
+        // 1. Dedupe call returns uncertain probability 0.65 (between 0.50 and 0.85)
+        var dedupeResp = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["is_duplicate"] = new NoulAnswer { Noul = 0.65 }
+            }
+        };
+
+        // 2. Eval call returns P3 score (1.8) and Backlog choice
+        var evalResp = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["priority_score"] = new ScoreAnswer { Score = 1.8, Confidence = 0.90, Legend = new Dictionary<int, System.Text.Json.Nodes.JsonNode?> { [1] = null }, Probabilities = new Dictionary<int, double> { [1] = 1.0 } },
+                ["route_choice"] = new ChoiceAnswer { Choice = "Backlog", Confidence = 0.90, Probabilities = new Dictionary<string, double> { ["Backlog"] = 0.90 } }
+            }
+        };
+
+        mockJev.SetupSequence(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.IsAny<IReadOnlyDictionary<string, Question>>(),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(dedupeResp)
+            .ReturnsAsync(evalResp);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var finding = CreateFinding("Minor naming nit", "Refactoring", "Low", "Utils/Helper.cs");
+        var existingIssues = new List<ExistingIssue>
+        {
+            new(28, "Helper cleanup", "Minor cleanup in Helper.cs")
+        };
+
+        var decision = await engine.EvaluateFindingAsync(finding, existingIssues, _config);
+
+        decision.IsDuplicate.Should().BeTrue();
+        decision.DuplicateOfIssueNumber.Should().Be(28);
+        decision.DuplicateProbability.Should().Be(0.65);
+        decision.PriorityLabel.Should().Be("P3");
+        decision.Status.Should().Be(TriageStatus.SuppressedDuplicate);
+        decision.TargetColumn.Should().Be("Discard");
+    }
+
+    [Fact]
+    public async Task JevEngine_TriageAll_EnforcesMaxIssuesPerRunCapOnP3_AndExemptsP0ThroughP2()
+    {
+        var mockJev = new Mock<IJevClient>();
+
+        SystemOneResponse CreateEvalResp(double score) => new()
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["priority_score"] = new ScoreAnswer { Score = score, Confidence = 0.90, Legend = new Dictionary<int, System.Text.Json.Nodes.JsonNode?> { [1] = null }, Probabilities = new Dictionary<int, double> { [1] = 1.0 } },
+                ["route_choice"] = new ChoiceAnswer { Choice = "Backlog", Confidence = 0.90, Probabilities = new Dictionary<string, double> { ["Backlog"] = 0.90 } }
+            }
+        };
+
+        mockJev.SetupSequence(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.IsAny<IReadOnlyDictionary<string, Question>>(),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(CreateEvalResp(4.8)) // P0
+            .ReturnsAsync(CreateEvalResp(3.8)) // P1
+            .ReturnsAsync(CreateEvalResp(2.8)) // P2
+            .ReturnsAsync(CreateEvalResp(2.0)) // P3 #1
+            .ReturnsAsync(CreateEvalResp(1.5)); // P3 #2 (exceeds cap of 1)
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig { MaxIssuesPerRun = 1 }
+        };
+
+        var findings = new List<FindingCandidate>
+        {
+            CreateFinding("P0 Finding", "Security", "Critical", "A.cs"),
+            CreateFinding("P1 Finding", "Security", "High", "B.cs"),
+            CreateFinding("P2 Finding", "Refactoring", "Medium", "C.cs"),
+            CreateFinding("P3 Finding 1", "Refactoring", "Low", "D.cs"),
+            CreateFinding("P3 Finding 2", "Refactoring", "Low", "E.cs")
+        };
+
+        var decisions = await engine.TriageAllAsync(findings, [], config);
+
+        decisions.Should().HaveCount(5);
+        decisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog).Should().Be(4);
+        decisions.Single(d => d.Finding.Title == "P3 Finding 2").Status.Should().Be(TriageStatus.DiscardedNoise);
+        decisions.Single(d => d.Finding.Title == "P3 Finding 2").TargetColumn.Should().Be("Discard");
+    }
+
+    [Fact]
     public async Task JevEngine_VerifyIssueResolutions_WhenNoulHighConfidence_ClosesResolvedIssueAndSendsCalibratedPayload()
     {
         var mockJev = new Mock<IJevClient>();
