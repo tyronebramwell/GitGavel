@@ -146,7 +146,7 @@ public class System1Tests
     }
 
     [Fact]
-    public async Task TriageAll_EnforcesMaxIssuesPerRunCap()
+    public async Task TriageAll_EnforcesMaxIssuesPerRunCap_ExemptingP0ThroughP2()
     {
         var engine = new MockTriageEngine();
         var config = new GitGavelConfig
@@ -156,16 +156,68 @@ public class System1Tests
 
         var findings = new List<FindingCandidate>
         {
-            CreateFinding("Finding 1", "Security", "Critical", "File1.cs"),
-            CreateFinding("Finding 2", "Security", "High", "File2.cs"),
-            CreateFinding("Finding 3", "Security", "Medium", "File3.cs")
+            CreateFinding("Finding P0", "Security", "Critical", "File1.cs"),
+            CreateFinding("Finding P1", "Security", "High", "File2.cs"),
+            CreateFinding("Finding P2", "Security", "Medium", "File3.cs"),
+            CreateFinding("Finding P3-1", "Refactoring", "Low", "File4.cs"),
+            CreateFinding("Finding P3-2", "Refactoring", "Low", "File5.cs"),
+            CreateFinding("Finding P3-3", "Refactoring", "Low", "File6.cs")
         };
 
         var decisions = await engine.TriageAllAsync(findings, [], config);
 
-        decisions.Should().HaveCount(3);
-        decisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog).Should().Be(2);
-        decisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview).Should().Be(1);
+        decisions.Should().HaveCount(6);
+        // P0, P1, P2 are exempt (3) + top 2 P3 findings allowed (2) = 5 AcceptedToBacklog
+        decisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog).Should().Be(5);
+        // 3rd P3 finding exceeds MaxIssuesPerRun (2) and is discarded
+        decisions.Count(d => d.Status == TriageStatus.DiscardedNoise).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task JevEngine_WhenNoulIsBelowHumanReviewThreshold_DoesNotRouteAsUncertainDuplicate()
+    {
+        var mockJev = new Mock<IJevClient>();
+
+        // 1. Dedupe call returns low similarity 0.25 (< HumanReviewConfidence 0.50)
+        var dedupeResp = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["is_duplicate"] = new NoulAnswer { Noul = 0.25 }
+            }
+        };
+
+        // 2. Eval call returns Backlog and score 3.2 (P2)
+        var evalResp = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["priority_score"] = new ScoreAnswer { Score = 3.2, Confidence = 0.90, Legend = new Dictionary<int, System.Text.Json.Nodes.JsonNode?> { [1] = null }, Probabilities = new Dictionary<int, double> { [1] = 1.0 } },
+                ["route_choice"] = new ChoiceAnswer { Choice = "Backlog", Confidence = 0.90, Probabilities = new Dictionary<string, double> { ["Backlog"] = 0.90 } }
+            }
+        };
+
+        mockJev.SetupSequence(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.IsAny<IReadOnlyDictionary<string, Question>>(),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(dedupeResp)
+            .ReturnsAsync(evalResp);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var finding = CreateFinding("Add retry policy", "Refactoring", "Medium", "Net/Http.cs");
+        var existingIssues = new List<ExistingIssue>
+        {
+            new(50, "Unrelated issue", "Some other description")
+        };
+
+        var decision = await engine.EvaluateFindingAsync(finding, existingIssues, _config);
+
+        decision.IsDuplicate.Should().BeFalse();
+        decision.DuplicateOfIssueNumber.Should().BeNull();
+        decision.Status.Should().Be(TriageStatus.AcceptedToBacklog);
     }
 
     [Fact]

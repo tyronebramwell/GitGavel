@@ -157,9 +157,9 @@ Once candidate findings, PR review comments, and issue resolution proofs are gen
   * *Issue Deduplication*: `Does candidate finding [Candidate_A] represent the same core problem or refactoring target as existing issue #[Issue_N]?`
   * *PR Comment Deduplication*: `Does candidate PR comment [Comment_A] duplicate an existing review comment or thread on Pull Request #[PR_N]?`
 * **Behavior**:
-  * $P \ge 0.85$: Flagged as duplicate $\rightarrow$ **Skip creation / Suppress PR comment**.
-  * $P \le 0.15$: Novel finding $\rightarrow$ **Proceed to scoring**.
-  * $0.15 < P < 0.85$: Uncertain $\rightarrow$ Add reference to existing issue and route to human review.
+  * $P \ge 0.85$ (`autoBacklogConfidence`): Flagged as duplicate $\rightarrow$ **Skip creation / Suppress PR comment**.
+  * $P < \text{humanReviewConfidence}$ ($0.50\text{–}0.60$): Novel finding $\rightarrow$ **Proceed to scoring**.
+  * $\text{humanReviewConfidence} \le P < 0.85$: Uncertain $\rightarrow$ Suppress if `P3`; for `P0`–`P2`, add reference to existing issue and route to human review.
 
 ### 5.2 Issue Resolution Verification with Jev `Noul`
 * **Primitive**: `Noul` (Boolean probability $0.0 \dots 1.0$).
@@ -386,7 +386,7 @@ triage:
       humanReviewConfidence: 0.50     # 0.50 - 0.85 -> AI Triage
       autoCloseIssueConfidence: 0.90  # >= 0.90 -> Verify fix, post commit summary & close issue
     dedupeWithNoul: true
-  maxIssuesPerRun: 4                  # Safety cap per audit run
+  maxIssuesPerRun: 4                  # Safety cap per audit run for P3 issues (P0, P1, and P2 exempt)
 
 # Developer Reporting Engine
 reporting:
@@ -466,6 +466,8 @@ ENTRYPOINT ["gitgavel"]
 ```yaml
 name: "GitGavel AI Repo & PR Audit"
 on:
+  push:
+    branches: [main]
   schedule:
     - cron: '0 3 * * 1'
   pull_request:
