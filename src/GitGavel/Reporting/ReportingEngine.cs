@@ -1,3 +1,4 @@
+using GitGavel.Configuration;
 using GitGavel.Reporting.Reporters;
 
 namespace GitGavel.Reporting;
@@ -20,10 +21,10 @@ public class ReportingEngine
         new TestQualityReporter()
     ];
 
-    public async Task<List<string>> GenerateReportsAsync(ReportContext ctx, CancellationToken ct = default)
+    public async Task<List<string>> GenerateReportsAsync(ReportContext ctx, bool allowExternalPaths = false, CancellationToken ct = default)
     {
         var generatedFiles = new List<string>();
-        var outputDir = Path.GetFullPath(ctx.Config.Reporting.OutputDir);
+        var outputDir = PathSecurity.ResolveAndVerifyWithinRoot(ctx.Config.Reporting.OutputDir, ctx.RepoContext.RootDirectory, allowExternalPaths);
         Directory.CreateDirectory(outputDir);
 
         foreach (var reporter in _reporters)

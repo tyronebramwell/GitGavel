@@ -57,6 +57,10 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         [CommandOption("--pr <NUMBER>")]
         [Description("Optional Pull Request number to audit for PR reviews and inline comments.")]
         public int? PullRequestNumber { get; set; }
+
+        [CommandOption("--allow-external-paths")]
+        [Description("Explicitly allow configuration, SARIF, or reporting paths outside the repository root.")]
+        public bool AllowExternalPaths { get; set; }
     }
 
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
@@ -76,6 +80,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             settings.UseMock = true;
         if (!settings.UseMockLlm && string.Equals(Environment.GetEnvironmentVariable("INPUT_MOCK_LLM"), "true", StringComparison.OrdinalIgnoreCase))
             settings.UseMockLlm = true;
+        if (!settings.AllowExternalPaths && string.Equals(Environment.GetEnvironmentVariable("INPUT_ALLOW_EXTERNAL_PATHS"), "true", StringComparison.OrdinalIgnoreCase))
+            settings.AllowExternalPaths = true;
         if (settings.RepoDirectory == "." && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_REPO_DIRECTORY")))
             settings.RepoDirectory = Environment.GetEnvironmentVariable("INPUT_REPO_DIRECTORY")!;
         if (settings.ConfigPath == ".gitgavel.yml" && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_CONFIG_PATH")))
@@ -86,22 +92,22 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         var activePrNumber = _gitService.ResolvePullRequestNumber(settings.PullRequestNumber);
 
         var repoDir = Path.GetFullPath(settings.RepoDirectory);
-        DotEnvLoader.Load(repoDir);
+        PathSecurity.ValidateRootDirectory(repoDir);
+        DotEnvLoader.Load(repoDir, settings.AllowExternalPaths);
         var (commitSha, branch) = _gitService.GetGitMetadata(repoDir);
-        var configPath = Path.IsPathRooted(settings.ConfigPath)
-            ? settings.ConfigPath
-            : Path.Combine(repoDir, settings.ConfigPath);
+        var configPath = PathSecurity.ResolveAndVerifyWithinRoot(settings.ConfigPath, repoDir, settings.AllowExternalPaths);
 
         GitGavelConfig config;
         if (File.Exists(configPath))
         {
             AnsiConsole.MarkupLine($"[green]✓[/] Loaded configuration from: [cyan]{Markup.Escape(configPath)}[/]");
-            config = await ConfigLoader.LoadFromFileAsync(configPath);
+            config = await ConfigLoader.LoadFromFileAsync(configPath, settings.AllowExternalPaths, cancellationToken);
         }
         else
         {
             AnsiConsole.MarkupLine($"[yellow]![/] Configuration file not found at [cyan]{Markup.Escape(configPath)}[/]. Using defaults.");
             config = new GitGavelConfig();
+            ConfigLoader.Validate(config, settings.AllowExternalPaths);
         }
 
         var explicitRepo = settings.Repository ?? config.Github.Repository;
@@ -129,7 +135,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             .Spinner(Spinner.Known.Dots)
             .StartAsync("Scanning repository files, specs, tests, and commit history...", async ctx =>
             {
-                repoContext = await scanner.ScanAsync(repoDir, config);
+                repoContext = await scanner.ScanAsync(repoDir, config, settings.AllowExternalPaths, cancellationToken);
             });
 
         PullRequestContext? prContext = null;
@@ -461,7 +467,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         };
 
         var reportingEngine = new ReportingEngine();
-        var generatedReports = await reportingEngine.GenerateReportsAsync(reportCtx, cancellationToken);
+        var generatedReports = await reportingEngine.GenerateReportsAsync(reportCtx, settings.AllowExternalPaths, cancellationToken);
 
         AnsiConsole.MarkupLine("[bold green]📁 Developer Reports Generated[/]\n");
         foreach (var reportFile in generatedReports)

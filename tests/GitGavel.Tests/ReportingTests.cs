@@ -19,9 +19,9 @@ public class ReportingTests
 
         var repoContext = new RepoContext
         {
-            RootDirectory = "/mock/repo",
-            SpecFiles = [new ScannedFile("specs/api.md", "/mock/specs/api.md", 50, 1200, "# Spec", true)],
-            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 100, 3400, "public class App {}", false)],
+            RootDirectory = tempOutputDir,
+            SpecFiles = [new ScannedFile("specs/api.md", Path.Combine(tempOutputDir, "specs/api.md"), 50, 1200, "# Spec", true)],
+            SourceFiles = [new ScannedFile("src/App.cs", Path.Combine(tempOutputDir, "src/App.cs"), 100, 3400, "public class App {}", false)],
             SarifFindings = [new SarifFinding("csharp.sql.injection", "SQL injection alert", "error", "src/App.cs", 42, 45)]
         };
 

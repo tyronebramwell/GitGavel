@@ -2,7 +2,7 @@ namespace GitGavel.Configuration;
 
 public static class DotEnvLoader
 {
-    public static void Load(string? directory = null)
+    public static void Load(string? directory = null, bool allowExternalPaths = false)
     {
         var dir = directory ?? Directory.GetCurrentDirectory();
         var envPath = Path.Combine(dir, ".env");
@@ -10,7 +10,8 @@ public static class DotEnvLoader
 
         try
         {
-            foreach (var line in File.ReadAllLines(envPath))
+            var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(envPath, dir, allowExternalPaths);
+            foreach (var line in File.ReadAllLines(verifiedPath))
             {
                 var trimmed = line.Trim();
                 if (string.IsNullOrWhiteSpace(trimmed) || trimmed.StartsWith('#')) continue;

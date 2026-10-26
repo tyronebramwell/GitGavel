@@ -14,10 +14,12 @@ public class FileScanner
         _gitService = gitService ?? new GitService();
     }
 
-    public async Task<RepoContext> ScanAsync(string rootDirectory, GitGavelConfig config, CancellationToken ct = default)
+    public async Task<RepoContext> ScanAsync(string rootDirectory, GitGavelConfig config, bool allowExternalPaths = false, CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
         ArgumentNullException.ThrowIfNull(config);
+
+        PathSecurity.ValidateRootDirectory(rootDirectory);
 
         var dirInfo = new DirectoryInfo(rootDirectory);
         if (!dirInfo.Exists)
@@ -42,13 +44,16 @@ public class FileScanner
             var absPath = Path.Combine(rootDirectory, file.Path);
             if (!File.Exists(absPath)) continue;
 
-            var content = await File.ReadAllTextAsync(absPath, ct);
+            // Enforce path containment and symlink boundaries
+            var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(absPath, rootDirectory, allowExternalPaths);
+
+            var content = await File.ReadAllTextAsync(verifiedPath, ct);
             var lineCount = CountLines(content);
-            var fileInfo = new FileInfo(absPath);
+            var fileInfo = new FileInfo(verifiedPath);
 
             specFiles.Add(new ScannedFile(
                 RelativePath: file.Path,
-                AbsolutePath: absPath,
+                AbsolutePath: verifiedPath,
                 LineCount: lineCount,
                 SizeBytes: fileInfo.Length,
                 Content: content,
@@ -74,13 +79,16 @@ public class FileScanner
             var absPath = Path.Combine(rootDirectory, file.Path);
             if (!File.Exists(absPath)) continue;
 
-            var content = await File.ReadAllTextAsync(absPath, ct);
+            // Enforce path containment and symlink boundaries
+            var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(absPath, rootDirectory, allowExternalPaths);
+
+            var content = await File.ReadAllTextAsync(verifiedPath, ct);
             var lineCount = CountLines(content);
-            var fileInfo = new FileInfo(absPath);
+            var fileInfo = new FileInfo(verifiedPath);
 
             sourceFiles.Add(new ScannedFile(
                 RelativePath: file.Path,
-                AbsolutePath: absPath,
+                AbsolutePath: verifiedPath,
                 LineCount: lineCount,
                 SizeBytes: fileInfo.Length,
                 Content: content,
@@ -106,13 +114,16 @@ public class FileScanner
             var absPath = Path.Combine(rootDirectory, file.Path);
             if (!File.Exists(absPath)) continue;
 
-            var content = await File.ReadAllTextAsync(absPath, ct);
+            // Enforce path containment and symlink boundaries
+            var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(absPath, rootDirectory, allowExternalPaths);
+
+            var content = await File.ReadAllTextAsync(verifiedPath, ct);
             var lineCount = CountLines(content);
-            var fileInfo = new FileInfo(absPath);
+            var fileInfo = new FileInfo(verifiedPath);
 
             testFiles.Add(new ScannedFile(
                 RelativePath: file.Path,
-                AbsolutePath: absPath,
+                AbsolutePath: verifiedPath,
                 LineCount: lineCount,
                 SizeBytes: fileInfo.Length,
                 Content: content,
@@ -126,13 +137,13 @@ public class FileScanner
         {
             foreach (var sarifPath in config.Subagents.Security.SarifReports)
             {
-                var fullSarifPath = Path.IsPathRooted(sarifPath)
-                    ? sarifPath
-                    : Path.Combine(rootDirectory, sarifPath);
+                if (string.IsNullOrWhiteSpace(sarifPath)) continue;
 
-                if (File.Exists(fullSarifPath))
+                var verifiedSarifPath = PathSecurity.ResolveAndVerifyWithinRoot(sarifPath, rootDirectory, allowExternalPaths);
+
+                if (File.Exists(verifiedSarifPath))
                 {
-                    var findings = await SarifParser.ParseFileAsync(fullSarifPath, ct);
+                    var findings = await SarifParser.ParseFileAsync(verifiedSarifPath, ct);
                     sarifFindings.AddRange(findings);
                 }
             }
