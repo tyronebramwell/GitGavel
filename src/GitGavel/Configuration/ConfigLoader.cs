@@ -1,3 +1,4 @@
+using System.Security;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
@@ -15,7 +16,7 @@ public static class ConfigLoader
         .ConfigureDefaultValuesHandling(DefaultValuesHandling.OmitNull)
         .Build();
 
-    public static GitGavelConfig LoadFromString(string yamlContent)
+    public static GitGavelConfig LoadFromString(string yamlContent, bool allowExternalPaths = false)
     {
         if (string.IsNullOrWhiteSpace(yamlContent))
         {
@@ -23,11 +24,11 @@ public static class ConfigLoader
         }
 
         var config = Deserializer.Deserialize<GitGavelConfig>(yamlContent) ?? new GitGavelConfig();
-        Validate(config);
+        Validate(config, allowExternalPaths);
         return config;
     }
 
-    public static async Task<GitGavelConfig> LoadFromFileAsync(string path, CancellationToken ct = default)
+    public static async Task<GitGavelConfig> LoadFromFileAsync(string path, bool allowExternalPaths = false, CancellationToken ct = default)
     {
         if (!File.Exists(path))
         {
@@ -35,7 +36,7 @@ public static class ConfigLoader
         }
 
         var content = await File.ReadAllTextAsync(path, ct);
-        return LoadFromString(content);
+        return LoadFromString(content, allowExternalPaths);
     }
 
     public static string Serialize(GitGavelConfig config)
@@ -43,7 +44,7 @@ public static class ConfigLoader
         return Serializer.Serialize(config);
     }
 
-    public static void Validate(GitGavelConfig config)
+    public static void Validate(GitGavelConfig config, bool allowExternalPaths = false)
     {
         ArgumentNullException.ThrowIfNull(config);
 
@@ -71,6 +72,48 @@ public static class ConfigLoader
         if (thresholds.AutoCloseIssueConfidence is < 0 or > 1.0)
         {
             throw new InvalidOperationException("triage.jev.thresholds.autoCloseIssueConfidence must be between 0.0 and 1.0.");
+        }
+
+        // Validate Scope Glob Patterns for directory traversal or absolute paths
+        ValidateScopePatterns("scope.specs.include", config.Scope.Specs.Include);
+        ValidateScopePatterns("scope.source.include", config.Scope.Source.Include);
+        ValidateScopePatterns("scope.source.exclude", config.Scope.Source.Exclude);
+        ValidateScopePatterns("scope.tests.include", config.Scope.Tests.Include);
+        ValidateScopePatterns("scope.tests.exclude", config.Scope.Tests.Exclude);
+
+        // Validate SARIF report paths
+        if (config.Subagents.Security.SarifReports != null)
+        {
+            foreach (var sarifPath in config.Subagents.Security.SarifReports)
+            {
+                if (string.IsNullOrWhiteSpace(sarifPath)) continue;
+                if (!allowExternalPaths && !PathSecurity.IsSafeRelativePath(sarifPath))
+                {
+                    throw new SecurityException($"Unsafe SARIF report path detected: '{sarifPath}'. SARIF report paths must be relative and cannot contain directory traversal ('..'). Use --allow-external-paths to override.");
+                }
+            }
+        }
+
+        // Validate reporting output directory
+        if (!string.IsNullOrWhiteSpace(config.Reporting.OutputDir))
+        {
+            if (!allowExternalPaths && !PathSecurity.IsSafeRelativePath(config.Reporting.OutputDir))
+            {
+                throw new SecurityException($"Unsafe reporting output directory detected: '{config.Reporting.OutputDir}'. Reporting output directory must be relative and cannot contain directory traversal ('..'). Use --allow-external-paths to override.");
+            }
+        }
+    }
+
+    private static void ValidateScopePatterns(string sectionName, IEnumerable<string>? patterns)
+    {
+        if (patterns == null) return;
+        foreach (var pattern in patterns)
+        {
+            if (string.IsNullOrWhiteSpace(pattern)) continue;
+            if (!PathSecurity.IsSafeRelativePath(pattern))
+            {
+                throw new SecurityException($"Malicious scope glob pattern detected in {sectionName}: '{pattern}'. Scope patterns must be relative to the repository root and cannot contain directory traversal ('..').");
+            }
         }
     }
 

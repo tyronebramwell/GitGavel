@@ -14,23 +14,38 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         [Description("Path to .gitgavel.yml configuration file to validate.")]
         [DefaultValue(".gitgavel.yml")]
         public string ConfigPath { get; set; } = ".gitgavel.yml";
+
+        [CommandOption("--allow-external-paths")]
+        [Description("Explicitly allow configuration or reporting paths outside the current directory.")]
+        public bool AllowExternalPaths { get; set; }
     }
 
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
     {
         AnsiConsole.MarkupLine("[bold]GitGavel Configuration & Environment Validation[/]\n");
 
-        if (!File.Exists(settings.ConfigPath))
+        string configPath;
+        try
         {
-            AnsiConsole.MarkupLine($"[red]✗[/] Configuration file not found at: [cyan]{Markup.Escape(settings.ConfigPath)}[/]");
+            configPath = PathSecurity.ResolveAndVerifyWithinRoot(settings.ConfigPath, Directory.GetCurrentDirectory(), settings.AllowExternalPaths);
+        }
+        catch (Exception ex)
+        {
+            AnsiConsole.MarkupLine($"[red]✗[/] Configuration path security validation failed: {Markup.Escape(ex.Message)}");
+            return 1;
+        }
+
+        if (!File.Exists(configPath))
+        {
+            AnsiConsole.MarkupLine($"[red]✗[/] Configuration file not found at: [cyan]{Markup.Escape(configPath)}[/]");
             return 1;
         }
 
         GitGavelConfig config;
         try
         {
-            config = await ConfigLoader.LoadFromFileAsync(settings.ConfigPath);
-            AnsiConsole.MarkupLine($"[green]✓[/] Configuration syntax and thresholds are valid in [cyan]{Markup.Escape(settings.ConfigPath)}[/]");
+            config = await ConfigLoader.LoadFromFileAsync(configPath, settings.AllowExternalPaths, cancellationToken);
+            AnsiConsole.MarkupLine($"[green]✓[/] Configuration syntax, scope globs, and thresholds are valid in [cyan]{Markup.Escape(configPath)}[/]");
         }
         catch (Exception ex)
         {
@@ -38,8 +53,8 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
             return 1;
         }
 
-        var dir = Path.GetDirectoryName(Path.GetFullPath(settings.ConfigPath));
-        DotEnvLoader.Load(dir);
+        var dir = Path.GetDirectoryName(Path.GetFullPath(configPath));
+        DotEnvLoader.Load(dir, settings.AllowExternalPaths);
 
         var envTable = new Table().Border(TableBorder.Rounded);
         envTable.AddColumn("[bold]Variable / Setting[/]");

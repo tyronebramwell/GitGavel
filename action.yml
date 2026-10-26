@@ -34,6 +34,10 @@ inputs:
     description: "Use simulated mock LLM subagents while preserving live TypeSafe Jev triage"
     required: false
     default: "false"
+  allow_external_paths:
+    description: "Explicitly allow configuration, SARIF, or reporting paths outside the repository root"
+    required: false
+    default: "false"
 
 runs:
   using: "docker"
