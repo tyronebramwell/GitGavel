@@ -11,12 +11,14 @@ public class OpenAiLlmClient : ILlmClient
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
 
-    public OpenAiLlmClient(string? apiKey = null, HttpClient? httpClient = null)
+    public TimeSpan Timeout => _httpClient.Timeout;
+
+    public OpenAiLlmClient(string? apiKey = null, HttpClient? httpClient = null, TimeSpan? timeout = null)
     {
         _apiKey = apiKey
             ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
             ?? "";
-        _httpClient = httpClient ?? new HttpClient();
+        _httpClient = httpClient ?? new HttpClient { Timeout = timeout ?? TimeSpan.FromSeconds(300) };
     }
 
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)

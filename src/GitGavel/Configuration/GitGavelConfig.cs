@@ -38,6 +38,7 @@ public class SubagentsConfig
 {
     public string ApiKeyEnv { get; set; } = "AI_API_KEY";
     public string? ApiKey { get; set; }
+    public int TimeoutSeconds { get; set; } = 300;
 
     public SubagentSettings SpecDrift { get; set; } = new()
     {
@@ -82,6 +83,7 @@ public class SubagentSettings
     public bool Enabled { get; set; } = true;
     public string Provider { get; set; } = "gemini";
     public string Model { get; set; } = "gemini-2.5-pro";
+    public int? TimeoutSeconds { get; set; }
 }
 
 public class SecuritySubagentSettings : SubagentSettings

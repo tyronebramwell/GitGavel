@@ -368,6 +368,7 @@ scope:
 
 # System 2 Subagents (Generative LLMs)
 subagents:
+  timeoutSeconds: 300                 # Subagent LLM request timeout (default: 300s / 5 mins)
   specDrift:
     enabled: true
     provider: "gemini"

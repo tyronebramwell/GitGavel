@@ -122,4 +122,30 @@ public class ConfigurationTests
         config.Github.PullRequests.DefaultReviewEvent.Should().Be("REQUEST_CHANGES");
         config.Github.ProjectsV2.Columns.Done.Should().Be("Completed");
     }
+
+    [Fact]
+    public void LoadFromString_DefaultTimeout_Is300Seconds()
+    {
+        var config = ConfigLoader.LoadFromString("");
+        config.Subagents.TimeoutSeconds.Should().Be(300);
+        config.Subagents.Tests.TimeoutSeconds.Should().BeNull();
+    }
+
+    [Fact]
+    public void LoadFromString_WithCustomGlobalAndSubagentTimeout_ParsesCorrectly()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          timeoutSeconds: 450
+          tests:
+            enabled: true
+            timeoutSeconds: 600
+        """;
+
+        var config = ConfigLoader.LoadFromString(yaml);
+        config.Subagents.TimeoutSeconds.Should().Be(450);
+        config.Subagents.Tests.TimeoutSeconds.Should().Be(600);
+        config.Subagents.Security.TimeoutSeconds.Should().BeNull();
+    }
 }

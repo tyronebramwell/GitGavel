@@ -179,10 +179,11 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 
         // 2. System 2 Discovery Execution
         var apiKey = KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
+        var defaultTimeout = TimeSpan.FromSeconds(config.Subagents.TimeoutSeconds > 0 ? config.Subagents.TimeoutSeconds : 300);
 
         var llmClientFactory = new LlmClientFactory(
             forceMock: settings.UseMock || settings.UseMockLlm,
-            fallbackClient: new GeminiLlmClient(apiKey));
+            fallbackClient: new GeminiLlmClient(apiKey, timeout: defaultTimeout));
 
         ISubagentOrchestrator orchestrator = _injectedOrchestrator ?? new SubagentOrchestrator(llmClientFactory);
         OrchestrationResult orchestrationResult = null!;
