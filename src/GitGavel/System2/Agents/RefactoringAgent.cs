@@ -29,6 +29,7 @@ public class RefactoringAgent : ISubagent
         if (context.IsPullRequestMode && context.ActivePullRequest != null)
         {
             promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
+            promptBuilder.AppendLine("ANTI-SCOPE-CREEP RULE: Only report High or Medium severity architectural defects introduced in this PR. Do NOT flag Low-severity nits, do NOT nitpick test files (*Tests.cs), and do NOT suggest extracting extra interfaces/services for newly added helper methods; return [] if the PR changes are clean.");
         }
 
         promptBuilder.AppendLine();

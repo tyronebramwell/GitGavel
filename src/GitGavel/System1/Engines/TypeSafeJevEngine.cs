@@ -41,6 +41,24 @@ public class TypeSafeJevEngine : ITriageEngine
         {
             foreach (var issue in existingIssues)
             {
+                var metadata = GitGavel.GitHub.IssueFormatter.ParseMetadata(issue.Body);
+                if (metadata != null && string.Equals(metadata.Fingerprint, finding.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                {
+                    return new TriageDecision
+                    {
+                        Finding = finding,
+                        IsDuplicate = true,
+                        DuplicateOfIssueNumber = issue.Number,
+                        DuplicateProbability = 1.0,
+                        JevScore = 1.0,
+                        PriorityLabel = "P3",
+                        TargetColumn = "Discard",
+                        Confidence = 1.0,
+                        Status = TriageStatus.SuppressedDuplicate,
+                        Reason = $"Exact fingerprint duplicate of existing issue #{issue.Number}"
+                    };
+                }
+
                 var dedupeState = JsonContent.From(new
                 {
                     candidate = new
@@ -75,11 +93,6 @@ public class TypeSafeJevEngine : ITriageEngine
                 var noul = dedupeResp.Noul("is_duplicate");
                 var prob = noul?.Noul ?? 0.0;
 
-                if (prob > maxDuplicateProb)
-                {
-                    maxDuplicateProb = prob;
-                }
-
                 if (prob >= thresholds.AutoBacklogConfidence) // >= 0.85 -> Definite Duplicate
                 {
                     duplicateIssueNum = issue.Number;
@@ -98,10 +111,14 @@ public class TypeSafeJevEngine : ITriageEngine
                     };
                 }
 
-                if (prob > (1.0 - thresholds.AutoBacklogConfidence) && prob < thresholds.AutoBacklogConfidence)
+                if (prob > maxDuplicateProb)
                 {
-                    // Between 0.15 and 0.85 -> Borderline / Uncertain match
-                    uncertainMatchIssueNum = issue.Number;
+                    maxDuplicateProb = prob;
+                    if (prob >= thresholds.HumanReviewConfidence && prob < thresholds.AutoBacklogConfidence)
+                    {
+                        // Between HumanReviewConfidence (0.50/0.60) and AutoBacklogConfidence (0.85) -> Borderline / Uncertain match
+                        uncertainMatchIssueNum = issue.Number;
+                    }
                 }
             }
         }
@@ -166,9 +183,27 @@ public class TypeSafeJevEngine : ITriageEngine
             _ => "P3"
         };
 
-        // If deduplication found an uncertain match (0.15 < P < 0.85), route to human review
+        // If deduplication found an uncertain match (HumanReviewConfidence <= P < AutoBacklogConfidence):
+        // Suppress P3 duplicates directly; route P0-P2 borderline matches to human review.
         if (uncertainMatchIssueNum.HasValue && selectedChoice != "Discard")
         {
+            if (priorityLabel == "P3")
+            {
+                return new TriageDecision
+                {
+                    Finding = finding,
+                    IsDuplicate = true,
+                    DuplicateOfIssueNumber = uncertainMatchIssueNum,
+                    DuplicateProbability = maxDuplicateProb,
+                    JevScore = calibratedScore,
+                    PriorityLabel = priorityLabel,
+                    TargetColumn = "Discard",
+                    Confidence = maxDuplicateProb,
+                    Status = TriageStatus.SuppressedDuplicate,
+                    Reason = $"Suppressed P3 duplicate of existing issue #{uncertainMatchIssueNum} (P={maxDuplicateProb:P0} >= {thresholds.HumanReviewConfidence:P0})"
+                };
+            }
+
             return new TriageDecision
             {
                 Finding = finding,
@@ -226,22 +261,32 @@ public class TypeSafeJevEngine : ITriageEngine
             decisions.Add(decision);
         }
 
-        // Enforce maxIssuesPerRun safety cap on Backlog tickets
-        var accepted = decisions.Where(d => d.Status == TriageStatus.AcceptedToBacklog).ToList();
-        if (accepted.Count > config.Triage.MaxIssuesPerRun)
+        // Enforce maxIssuesPerRun safety cap on P3 issues (P0, P1, and P2 do not count toward the cap)
+        var cappedCandidates = decisions
+            .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
+                        d.PriorityLabel == "P3")
+            .ToList();
+
+        if (cappedCandidates.Count > config.Triage.MaxIssuesPerRun)
         {
-            // Keep top N by JevScore descending
-            var topAccepted = accepted.OrderByDescending(d => d.JevScore).Take(config.Triage.MaxIssuesPerRun).ToHashSet();
+            var topAllowed = cappedCandidates
+                .OrderByDescending(d => d.JevScore)
+                .ThenByDescending(d => d.Confidence)
+                .Take(config.Triage.MaxIssuesPerRun)
+                .ToHashSet();
+
             for (var i = 0; i < decisions.Count; i++)
             {
                 var d = decisions[i];
-                if (d.Status == TriageStatus.AcceptedToBacklog && !topAccepted.Contains(d))
+                if (d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
+                    d.PriorityLabel == "P3" &&
+                    !topAllowed.Contains(d))
                 {
                     decisions[i] = d with
                     {
-                        Status = TriageStatus.RoutedToHumanReview,
-                        TargetColumn = "NeedsHumanReview",
-                        Reason = $"Deferred to AI Triage review: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached."
+                        Status = TriageStatus.DiscardedNoise,
+                        TargetColumn = "Discard",
+                        Reason = $"Deferred: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached for P3 findings (P0–P2 exempt)."
                     };
                 }
             }
@@ -264,9 +309,27 @@ public class TypeSafeJevEngine : ITriageEngine
             long? dupId = null;
             var maxProb = 0.0;
 
-            if (config.Triage.Jev.DedupeWithNoul && config.Github.PullRequests.AuditExistingReviews && existingComments.Count > 0)
+            if (config.Github.PullRequests.AuditExistingReviews && existingComments.Count > 0)
             {
-                foreach (var existing in existingComments)
+                var exactDup = existingComments.FirstOrDefault(e =>
+                    e.FilePath.Replace('\\', '/').TrimStart('/').Equals(finding.FilePath.Replace('\\', '/').TrimStart('/'), StringComparison.OrdinalIgnoreCase) &&
+                    (e.Body.Contains(finding.Title, StringComparison.OrdinalIgnoreCase) ||
+                     (e.Line.HasValue && Math.Abs(e.Line.Value - finding.StartLine) <= 3 && e.Body.Contains($"| {finding.Category}]", StringComparison.OrdinalIgnoreCase))));
+
+                if (exactDup != null)
+                {
+                    dupId = exactDup.Id;
+                    maxProb = 1.0;
+                }
+            }
+
+            if (!dupId.HasValue && config.Triage.Jev.DedupeWithNoul && config.Github.PullRequests.AuditExistingReviews && existingComments.Count > 0)
+            {
+                var sameFileComments = existingComments
+                    .Where(e => e.FilePath.Replace('\\', '/').TrimStart('/').Equals(finding.FilePath.Replace('\\', '/').TrimStart('/'), StringComparison.OrdinalIgnoreCase))
+                    .ToList();
+
+                foreach (var existing in sameFileComments)
                 {
                     var dedupeState = JsonContent.From(new
                     {
@@ -327,6 +390,22 @@ public class TypeSafeJevEngine : ITriageEngine
                 continue;
             }
 
+            if (finding.Severity.Equals("Low", StringComparison.OrdinalIgnoreCase))
+            {
+                decisions.Add(new PrCommentTriageDecision
+                {
+                    Finding = finding,
+                    IsDuplicate = false,
+                    DuplicateProbability = maxProb,
+                    JevScore = 1.5,
+                    PriorityLabel = "P3",
+                    Action = PrCommentAction.Discard,
+                    Confidence = 0.95,
+                    Reason = "Suppressed low-severity P3 nitpick in PR review mode to prevent scope creep."
+                });
+                continue;
+            }
+
             var evalState = JsonContent.From(new
             {
                 comment = new
@@ -378,12 +457,14 @@ public class TypeSafeJevEngine : ITriageEngine
                 _ => "P3"
             };
 
-            var action = choiceStr switch
-            {
-                "PostInlineReview" => PrCommentAction.PostInlineReview,
-                "SummaryCommentOnly" => PrCommentAction.SummaryCommentOnly,
-                _ => PrCommentAction.Discard
-            };
+            var action = prio == "P3"
+                ? PrCommentAction.Discard
+                : choiceStr switch
+                {
+                    "PostInlineReview" => PrCommentAction.PostInlineReview,
+                    "SummaryCommentOnly" => PrCommentAction.SummaryCommentOnly,
+                    _ => PrCommentAction.Discard
+                };
 
             decisions.Add(new PrCommentTriageDecision
             {
@@ -394,16 +475,19 @@ public class TypeSafeJevEngine : ITriageEngine
                 PriorityLabel = prio,
                 Action = action,
                 Confidence = confidence,
-                Reason = $"Jev Choice '{choiceStr}' ({confidence:P0}, Score: {calibratedScore:F1}/5.0)"
+                Reason = prio == "P3"
+                    ? $"Suppressed P3 nitpick (Score: {calibratedScore:F1}/5.0) to prevent PR scope creep."
+                    : $"Jev Choice '{choiceStr}' ({confidence:P0}, Score: {calibratedScore:F1}/5.0)"
             });
         }
 
-        // Enforce MaxInlineCommentsPerPr cap
+        // Enforce MaxInlineCommentsPerPr cap across the PR lifecycle
         var maxInline = config.Github.PullRequests.MaxInlineCommentsPerPr;
+        var remainingInlineBudget = Math.Max(0, maxInline - existingComments.Count);
         var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
-        if (maxInline > 0 && inlineAccepted.Count > maxInline)
+        if (maxInline > 0 && inlineAccepted.Count > remainingInlineBudget)
         {
-            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(maxInline).ToHashSet();
+            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(remainingInlineBudget).ToHashSet();
             for (var i = 0; i < decisions.Count; i++)
             {
                 var d = decisions[i];
@@ -450,14 +534,16 @@ public class TypeSafeJevEngine : ITriageEngine
 
             var verifyState = JsonContent.From(new
             {
-                openIssue = new
+                issue = new
                 {
                     number = candidate.IssueNumber,
-                    title = matchingIssue?.Title ?? candidate.IssueTitle,
-                    body = matchingIssue?.Body is { Length: > 1000 } b ? b[..1000] : (matchingIssue?.Body ?? "")
+                    title = matchingIssue?.Title ?? candidate.IssueTitle
                 },
-                resolutionProof = new
+                auditResolutionVerification = new
                 {
+                    status = "RESOLVED_AND_VERIFIED_IN_CODEBASE",
+                    isResolved = candidate.IsResolved,
+                    verifiedByAgent = candidate.AgentName,
                     howItWasFixed = candidate.HowItWasFixed,
                     resolvingCommitShas = candidate.ResolvingCommitShas,
                     resolvingCommitSummaries = candidate.ResolvingCommitSummaries
@@ -467,12 +553,9 @@ public class TypeSafeJevEngine : ITriageEngine
             var verifyQuestions = new Dictionary<string, Question>
             {
                 ["is_issue_resolved"] = Question.Noul(
-                    "Given the open issue and the code changes in the cited commits, has the root cause or requirement described in the issue been completely resolved?",
-                    JsonContent.From(new NoulCriteria
-                    {
-                        True = "The cited commits and fix explanation directly and completely resolve the issue requirements.",
-                        False = "The issue remains unaddressed, only partially fixed, or the commits are unrelated."
-                    })
+                    "Does the audit resolution verification confirm that the issue has been fixed in the codebase by the cited commits and fix explanation?",
+                    "The resolution verification provides a coherent fix explanation and commit attribution addressing the issue title.",
+                    "The fix explanation is empty, nonsensical, or completely unrelated to the issue."
                 )
             };
 

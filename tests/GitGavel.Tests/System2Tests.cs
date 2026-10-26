@@ -11,6 +11,7 @@ using GitGavel.System2.Providers;
 
 namespace GitGavel.Tests;
 
+[Collection("EnvironmentVariables")]
 public class System2Tests
 {
     [Fact]
@@ -375,5 +376,400 @@ public class System2Tests
 
         var mock = factory.CreateClient(new SubagentSettings { Provider = "mock" }, config);
         mock.Should().BeOfType<MockLlmClient>();
+    }
+
+    [Fact]
+    public async Task System2Agents_IncludeFullSpecAndAllSourceFilesWithoutTruncation()
+    {
+        var capturedPrompts = new List<string>();
+        var mockClient = new MockLlmClient(req =>
+        {
+            lock (capturedPrompts)
+            {
+                capturedPrompts.Add(req.Prompt);
+            }
+
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 50,
+                CompletionTokens = 10,
+                DurationMs = 5,
+                ModelUsed = req.Model
+            };
+        });
+
+        var longSpecContent = new string('A', 6000) + "\n## Section 10: Final Spec Requirement";
+        var sourceFiles = Enumerable.Range(1, 20)
+            .Select(i => new ScannedFile($"src/File{i:D2}.cs", $"/mock/src/File{i:D2}.cs", 25, 300, $"public class Class{i:D2} {{}}", false))
+            .ToList();
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 200, longSpecContent.Length, longSpecContent, true)],
+            SourceFiles = sourceFiles,
+            TestFiles = [new ScannedFile("tests/File20Tests.cs", "/mock/tests/File20Tests.cs", 20, 250, "public class File20Tests {}", false, true)],
+            SarifFindings = []
+        };
+
+        ISubagentOrchestrator orchestrator = new SubagentOrchestrator(mockClient);
+        await orchestrator.RunAllAsync(repoContext, new GitGavelConfig());
+
+        capturedPrompts.Should().HaveCount(4);
+        var specPrompt = capturedPrompts.Single(p => p.Contains("Spec Drift Agent"));
+        specPrompt.Should().Contain("## Section 10: Final Spec Requirement");
+        specPrompt.Should().Contain("src/File20.cs");
+
+        var securityPrompt = capturedPrompts.Single(p => p.Contains("Security Auditor Agent"));
+        securityPrompt.Should().Contain("src/File20.cs");
+
+        var testPrompt = capturedPrompts.Single(p => p.Contains("Test Sentinel Agent"));
+        testPrompt.Should().Contain("src/File20.cs");
+        testPrompt.Should().Contain("tests/File20Tests.cs");
+    }
+
+    [Fact]
+    public async Task IssueResolutionAgent_EvaluatesIssue1EvenWhenMoreThan25OpenIssuesExist()
+    {
+        string? capturedPrompt = null;
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = """
+                [
+                  {
+                    "issueNumber": 1,
+                    "issueTitle": "Missing Implementation of Generative LLM Agents (System 2)",
+                    "isResolved": true,
+                    "howItWasFixed": "Implemented ISubagentOrchestrator, SubagentOrchestrator, and System 2 agents with full repository context visibility.",
+                    "resolvingCommitShas": ["d60cdcf"]
+                  }
+                ]
+                """,
+                PromptTokens = 100,
+                CompletionTokens = 40,
+                DurationMs = 10,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new IssueResolutionAgent(mockClient);
+
+        // Simulate 31 open issues returned newest-first (#31 down to #1)
+        var openIssues = Enumerable.Range(1, 31)
+            .Reverse()
+            .Select(n => new ExistingIssue(
+                Number: n,
+                Title: n == 1 ? "Missing Implementation of Generative LLM Agents (System 2)" : $"Open Issue #{n}",
+                Body: $"Description for issue #{n}",
+                State: "open"))
+            .ToList();
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles =
+            [
+                new ScannedFile("src/GitGavel/Program.cs", "/mock/src/GitGavel/Program.cs", 25, 400, "var app = new CommandApp<AuditCommand>();", false),
+                new ScannedFile("src/GitGavel/System2/SubagentOrchestrator.cs", "/mock/src/GitGavel/System2/SubagentOrchestrator.cs", 100, 2000, "public class SubagentOrchestrator : ISubagentOrchestrator {}", false)
+            ],
+            SarifFindings = []
+        };
+
+        var result = await agent.EvaluateOpenIssuesAsync(openIssues, repoContext);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Candidates.Should().ContainSingle(c => c.IssueNumber == 1 && c.IsResolved);
+        capturedPrompt.Should().NotBeNull();
+        capturedPrompt!.Should().Contain("--- Issue #1: Missing Implementation of Generative LLM Agents (System 2) ---");
+        capturedPrompt.Should().Contain("### Repository Architecture & Symbol Map:");
+        capturedPrompt.Should().Contain("SubagentOrchestrator");
+    }
+
+    [Fact]
+    public async Task SubagentOrchestrator_ParameterlessConstructor_InitializesDefaultFactory()
+    {
+        var orchestrator = new SubagentOrchestrator();
+        var config = new GitGavelConfig();
+        config.Subagents.SpecDrift.Provider = "mock";
+        config.Subagents.Security.Provider = "mock";
+        config.Subagents.Refactoring.Provider = "mock";
+        config.Subagents.Tests.Provider = "mock";
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 10, 50, "# Spec", true)],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 10, 50, "public class App {}", false)],
+            SarifFindings = []
+        };
+
+        var result = await orchestrator.RunAllAsync(repoContext, config);
+        result.SubagentResults.Should().HaveCount(4);
+        result.AllFindings.Should().NotBeEmpty();
+    }
+
+    [Fact]
+    public async Task AuditCommand_WithInjectedOrchestrator_UsesInjectedOrchestratorInstance()
+    {
+        var customOrchestratorCalled = false;
+        var mockOrchestrator = new Moq.Mock<ISubagentOrchestrator>();
+        mockOrchestrator
+            .Setup(o => o.RunAllAsync(Moq.It.IsAny<RepoContext>(), Moq.It.IsAny<GitGavelConfig>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback(() => customOrchestratorCalled = true)
+            .Returns(Task.FromResult(new OrchestrationResult { AllFindings = [], SubagentResults = [] }));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_cmd_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var cmd = new GitGavel.Commands.AuditCommand(orchestrator: mockOrchestrator.Object);
+            var remaining = new Moq.Mock<Spectre.Console.Cli.IRemainingArguments>();
+            var cmdCtx = new Spectre.Console.Cli.CommandContext([], remaining.Object, "audit", null);
+            var settings = new GitGavel.Commands.AuditCommand.Settings
+            {
+                RepoDirectory = tempDir,
+                DryRun = true,
+                UseMock = true
+            };
+
+            var exitCode = await cmd.ExecuteAsync(cmdCtx, settings, CancellationToken.None);
+
+            exitCode.Should().Be(0);
+            customOrchestratorCalled.Should().BeTrue();
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task System2Agents_PromptTruncationLimits_EnforceExactBoundaries(bool exceedLimitByOne)
+    {
+        var capturedPrompts = new List<string>();
+        var mockClient = new MockLlmClient(req =>
+        {
+            lock (capturedPrompts)
+            {
+                capturedPrompts.Add(req.Prompt);
+            }
+
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 10,
+                CompletionTokens = 5,
+                DurationMs = 1,
+                ModelUsed = req.Model
+            };
+        });
+
+        var specLen = exceedLimitByOne ? 32001 : 32000;
+        var srcLen = exceedLimitByOne ? 8001 : 8000;
+        var diffLen = exceedLimitByOne ? 4001 : 4000;
+        var issueSrcLen = exceedLimitByOne ? 6001 : 6000;
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 100, specLen, new string('S', specLen), true)],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 100, srcLen, new string('C', srcLen), false, false, new string('D', diffLen))],
+            TestFiles = [new ScannedFile("tests/AppTests.cs", "/mock/tests/AppTests.cs", 100, srcLen, new string('T', srcLen), false, true, new string('P', diffLen))],
+            SarifFindings = []
+        };
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
+        await orchestrator.RunAllAsync(repoContext, new GitGavelConfig());
+
+        capturedPrompts.Should().HaveCount(4);
+        foreach (var prompt in capturedPrompts)
+        {
+            if (exceedLimitByOne)
+            {
+                prompt.Should().Contain("...(truncated)");
+            }
+            else
+            {
+                prompt.Should().NotContain("...(truncated)");
+            }
+        }
+
+        // Also verify IssueResolutionAgent 6000-character boundary
+        capturedPrompts.Clear();
+        var issueAgent = new IssueResolutionAgent(mockClient);
+        var issueRepoCtx = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/IssueFile.cs", "/mock/src/IssueFile.cs", 100, issueSrcLen, new string('X', issueSrcLen), false)],
+            SarifFindings = []
+        };
+
+        await issueAgent.EvaluateOpenIssuesAsync([new ExistingIssue(1, "Issue 1", "Body", "open")], issueRepoCtx);
+        capturedPrompts.Should().ContainSingle();
+        if (exceedLimitByOne)
+        {
+            capturedPrompts[0].Should().Contain("...(truncated)");
+        }
+        else
+        {
+            capturedPrompts[0].Should().NotContain("...(truncated)");
+        }
+    }
+
+    [Fact]
+    public async Task IssueResolutionAgent_FiltersOutUnresolvedItemsAndAttributesHeadCommitWhenShasOmitted()
+    {
+        var mockClient = new MockLlmClient(_ => new LlmResponse
+        {
+            Content = """
+            [
+              {
+                "issueNumber": 2,
+                "issueTitle": "Missing Implementation of Jev Decision Engine (System 1)",
+                "isResolved": true,
+                "howItWasFixed": "TypeSafeJevEngine was implemented with Noul, Score, and Choice primitives.",
+                "resolvingCommitShas": []
+              },
+              {
+                "issueNumber": 99,
+                "issueTitle": "Unresolved Future Feature",
+                "isResolved": false,
+                "howItWasFixed": "",
+                "resolvingCommitShas": []
+              }
+            ]
+            """,
+            PromptTokens = 50,
+            CompletionTokens = 25,
+            DurationMs = 5,
+            ModelUsed = "gemini-2.5-flash"
+        });
+
+        var agent = new IssueResolutionAgent(mockClient);
+        var repoCtx = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = [],
+            RecentCommits =
+            [
+                new GitCommitRecord(
+                    "67d3429273714987ff04e9a131cdff44503c7d41",
+                    "67d3429",
+                    "feat: implement Phase 2 System 1 Jev Triage Engine",
+                    "Tyrone",
+                    "2026-10-20T12:00:00Z",
+                    ["src/GitGavel/System1/Engines/TypeSafeJevEngine.cs"])
+            ]
+        };
+
+        var openIssues = new List<ExistingIssue>
+        {
+            new(2, "Missing Implementation of Jev Decision Engine (System 1)", "Body", "open"),
+            new(99, "Unresolved Future Feature", "Body", "open")
+        };
+
+        var result = await agent.EvaluateOpenIssuesAsync(openIssues, repoCtx);
+
+        result.IsSuccess.Should().BeTrue();
+        result.Candidates.Should().ContainSingle();
+        result.Candidates[0].IssueNumber.Should().Be(2);
+        result.Candidates[0].ResolvingCommitShas.Should().ContainSingle().Which.Should().Be("67d3429273714987ff04e9a131cdff44503c7d41");
+        result.Candidates[0].ResolvingCommitSummaries.Should().ContainSingle().Which.Should().Contain("`67d3429`");
+    }
+
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("test-gh-token-dryrun", false)]
+    public async Task AuditCommand_DryRunAndZeroFindings_ResolvesGitHubServiceByTokenAndPassesFullRepoContextToIssueResolution(
+        string? ghTokenValue,
+        bool useMockFlag)
+    {
+        var prevGh = Environment.GetEnvironmentVariable("GH_TOKEN");
+        var prevGithub = Environment.GetEnvironmentVariable("GITHUB_TOKEN");
+
+        RepoContext? capturedRunAllContext = null;
+        RepoContext? capturedIssueResContext = null;
+
+        var mockOrchestrator = new Moq.Mock<ISubagentOrchestrator>();
+        mockOrchestrator
+            .Setup(o => o.RunAllAsync(Moq.It.IsAny<RepoContext>(), Moq.It.IsAny<GitGavelConfig>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback<RepoContext, GitGavelConfig, CancellationToken>((ctx, _, _) => capturedRunAllContext = ctx)
+            .Returns(Task.FromResult(new OrchestrationResult { AllFindings = [], SubagentResults = [] }));
+
+        mockOrchestrator
+            .Setup(o => o.EvaluateIssueResolutionsAsync(
+                Moq.It.IsAny<IReadOnlyList<ExistingIssue>>(),
+                Moq.It.IsAny<RepoContext>(),
+                Moq.It.IsAny<GitGavelConfig>(),
+                Moq.It.IsAny<CancellationToken>()))
+            .Callback<IReadOnlyList<ExistingIssue>, RepoContext, GitGavelConfig, CancellationToken>((_, ctx, _, _) => capturedIssueResContext = ctx)
+            .Returns(Task.FromResult(new IssueResolutionAgentResult
+            {
+                AgentName = "IssueResolutionAuditor",
+                Candidates =
+                [
+                    new IssueResolutionCandidate
+                    {
+                        IssueNumber = 101,
+                        IssueTitle = "Isolate CI environment variables in GitService fallback test",
+                        IsResolved = true,
+                        HowItWasFixed = "Cleared CI env vars in GitServiceTests",
+                        ResolvingCommitShas = ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"]
+                    }
+                ],
+                IsSuccess = true
+            }));
+
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_dryrun_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(tempDir, "src"));
+        await File.WriteAllTextAsync(Path.Combine(tempDir, "src", "UnchangedFile.cs"), "public class UnchangedFile {}");
+        await File.WriteAllTextAsync(Path.Combine(tempDir, ".gitgavel.yml"), "triage:\n  engine: llm-synthesizer\n");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", ghTokenValue);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", null);
+
+            var cmd = new GitGavel.Commands.AuditCommand(orchestrator: mockOrchestrator.Object);
+            var remaining = new Moq.Mock<Spectre.Console.Cli.IRemainingArguments>();
+            var cmdCtx = new Spectre.Console.Cli.CommandContext([], remaining.Object, "audit", null);
+            var settings = new GitGavel.Commands.AuditCommand.Settings
+            {
+                RepoDirectory = tempDir,
+                DryRun = true,
+                UseMock = useMockFlag,
+                PullRequestNumber = useMockFlag ? 42 : null
+            };
+
+            var exitCode = await cmd.ExecuteAsync(cmdCtx, settings, CancellationToken.None);
+
+            exitCode.Should().Be(0);
+            capturedRunAllContext.Should().NotBeNull();
+
+            if (useMockFlag)
+            {
+                // In PR mode, RunAllAsync receives PR-scoped context while EvaluateIssueResolutionsAsync receives fullRepoContext (including UnchangedFile.cs)
+                capturedRunAllContext!.IsPullRequestMode.Should().BeTrue();
+                capturedIssueResContext.Should().NotBeNull();
+                capturedIssueResContext!.SourceFiles.Should().Contain(f => f.RelativePath.Contains("UnchangedFile.cs"));
+            }
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("GH_TOKEN", prevGh);
+            Environment.SetEnvironmentVariable("GITHUB_TOKEN", prevGithub);
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
     }
 }

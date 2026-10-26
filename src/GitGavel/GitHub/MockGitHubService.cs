@@ -12,6 +12,8 @@ public class MockGitHubService : IGitHubService
     public List<(IssueResolutionDecision Decision, ClosedIssueResult Result, string CommentBody)> ClosedIssues { get; } = [];
     public PullRequestContext? MockPullRequest { get; set; }
     public List<(PostedPrReviewResult Result, string SummaryBody, List<string> InlineBodies)> PostedPrReviews { get; } = [];
+    public List<(int PrNumber, string FilePath, int DiffPosition, string Body)> PostedPrInlineComments { get; } = [];
+    public List<(int PrNumber, string CommentBody)> PostedPrComments { get; } = [];
 
     private int _nextIssueNumber = 100;
     private long _nextReviewId = 500;
@@ -159,7 +161,25 @@ public class MockGitHubService : IGitHubService
             ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList()
             : [];
 
-        var inlineBodies = inlineDecisions.Select(IssueFormatter.FormatInlinePrComment).ToList();
+        var patchByFile = prContext.ChangedFiles
+            .GroupBy(f => f.FilePath.Replace('\\', '/').TrimStart('/'), StringComparer.OrdinalIgnoreCase)
+            .ToDictionary(g => g.Key, g => g.First().Patch, StringComparer.OrdinalIgnoreCase);
+
+        var inlineBodies = new List<string>();
+        foreach (var d in inlineDecisions)
+        {
+            var body = IssueFormatter.FormatInlinePrComment(d);
+            inlineBodies.Add(body);
+
+            var normPath = d.Finding.FilePath.Replace('\\', '/').TrimStart('/');
+            var diffPos = patchByFile.TryGetValue(normPath, out var patch) &&
+                          GitHubService.TryMapFileLineToDiffPosition(patch, d.Finding.StartLine, out var mappedPos)
+                ? mappedPos
+                : Math.Max(1, d.Finding.StartLine);
+
+            PostedPrInlineComments.Add((prNumber, normPath, diffPos, body));
+        }
+
         var summaryBody = config.Github.PullRequests.PostSummaryComment
             ? IssueFormatter.FormatPrReviewSummary(prContext, decisions)
             : "";
@@ -178,5 +198,30 @@ public class MockGitHubService : IGitHubService
 
         PostedPrReviews.Add((result, summaryBody, inlineBodies));
         return Task.FromResult(result);
+    }
+
+    public Task PostPullRequestCommentAsync(
+        string owner,
+        string repo,
+        int prNumber,
+        string commentBody,
+        CancellationToken ct = default)
+    {
+        var marker = IssueFormatter.ExtractStickyCommentMarker(commentBody);
+        if (!string.IsNullOrWhiteSpace(marker))
+        {
+            var existingIdx = PostedPrComments.FindIndex(c =>
+                c.PrNumber == prNumber &&
+                c.CommentBody.Contains(marker, StringComparison.OrdinalIgnoreCase));
+
+            if (existingIdx >= 0)
+            {
+                PostedPrComments[existingIdx] = (prNumber, commentBody);
+                return Task.CompletedTask;
+            }
+        }
+
+        PostedPrComments.Add((prNumber, commentBody));
+        return Task.CompletedTask;
     }
 }

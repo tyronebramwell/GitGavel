@@ -26,6 +26,7 @@ public class IssueResolutionAgent
     {
         var activeIssues = openIssues
             .Where(i => string.Equals(i.State, "open", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(i => i.Number)
             .ToList();
 
         if (activeIssues.Count == 0)
@@ -43,7 +44,7 @@ public class IssueResolutionAgent
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Open GitHub Issues:");
-        foreach (var issue in activeIssues.Take(25))
+        foreach (var issue in activeIssues)
         {
             promptBuilder.AppendLine($"--- Issue #{issue.Number}: {issue.Title} ---");
             var body = issue.Body ?? "";
@@ -66,11 +67,22 @@ public class IssueResolutionAgent
         }
 
         promptBuilder.AppendLine();
+        promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
+        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
+        foreach (var sum in summaries)
+        {
+            var symbolList = sum.Symbols.Count > 0
+                ? string.Join(", ", sum.Symbols.Select(s => $"{s.Kind} {s.Name}"))
+                : "None";
+            promptBuilder.AppendLine($"- File: `{sum.RelativePath}` | Symbols: {symbolList}");
+        }
+
+        promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Current Repository Files Snapshot:");
-        foreach (var src in context.SourceFiles.Concat(context.TestFiles).Take(15))
+        foreach (var src in context.SourceFiles.Concat(context.TestFiles))
         {
             promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
-            promptBuilder.AppendLine(src.Content.Length > 3000 ? src.Content[..3000] + "\n...(truncated)" : src.Content);
+            promptBuilder.AppendLine(src.Content.Length > 6000 ? src.Content[..6000] + "\n...(truncated)" : src.Content);
         }
 
         promptBuilder.AppendLine();
@@ -100,8 +112,11 @@ public class IssueResolutionAgent
 
             var candidates = FindingParser.ParseIssueResolutions(response.Content);
 
-            // Enrich commit summaries from context.RecentCommits if the LLM only provided SHAs
-            var enriched = candidates.Select(c => EnrichCommitSummaries(c, context)).ToList();
+            // Filter to resolved candidates and enrich commit summaries from context.RecentCommits
+            var enriched = candidates
+                .Where(c => c.IsResolved)
+                .Select(c => EnrichCommitSummaries(c, context))
+                .ToList();
 
             return new IssueResolutionAgentResult
             {
@@ -126,13 +141,21 @@ public class IssueResolutionAgent
 
     private static IssueResolutionCandidate EnrichCommitSummaries(IssueResolutionCandidate candidate, RepoContext context)
     {
-        if (candidate.ResolvingCommitSummaries.Count > 0 || candidate.ResolvingCommitShas.Count == 0)
+        var shas = candidate.ResolvingCommitShas;
+        if (shas.Count == 0 && candidate.IsResolved && context.RecentCommits.Count > 0)
         {
-            return candidate;
+            shas = [context.RecentCommits[0].Sha];
+        }
+
+        if (candidate.ResolvingCommitSummaries.Count > 0 || shas.Count == 0)
+        {
+            return shas == candidate.ResolvingCommitShas
+                ? candidate
+                : candidate with { ResolvingCommitShas = shas };
         }
 
         var summaries = new List<string>();
-        foreach (var sha in candidate.ResolvingCommitShas)
+        foreach (var sha in shas)
         {
             var match = context.RecentCommits.FirstOrDefault(c =>
                 c.Sha.StartsWith(sha, StringComparison.OrdinalIgnoreCase) ||
@@ -149,6 +172,10 @@ public class IssueResolutionAgent
             }
         }
 
-        return candidate with { ResolvingCommitSummaries = summaries };
+        return candidate with
+        {
+            ResolvingCommitShas = shas,
+            ResolvingCommitSummaries = summaries
+        };
     }
 }

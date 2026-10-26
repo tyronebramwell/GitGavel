@@ -316,6 +316,7 @@ public static partial class IssueFormatter
         sb.AppendLine();
 
         sb.AppendLine("---");
+        sb.AppendLine("<!-- gitgavel-sticky-comment: pr-summary -->");
         sb.AppendLine("<!-- gitgavel-pr-review");
         sb.AppendLine($"pr_number: {prContext.PrNumber}");
         sb.AppendLine($"head_sha: {prContext.HeadSha}");
@@ -325,5 +326,16 @@ public static partial class IssueFormatter
         sb.AppendLine("-->");
 
         return sb.ToString();
+    }
+
+    public static string? ExtractStickyCommentMarker(string? commentBody)
+    {
+        if (string.IsNullOrWhiteSpace(commentBody)) return null;
+        const string prefix = "<!-- gitgavel-sticky-comment:";
+        var idx = commentBody.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (idx < 0) return null;
+        var endIdx = commentBody.IndexOf("-->", idx, StringComparison.OrdinalIgnoreCase);
+        if (endIdx < 0) return null;
+        return commentBody[idx..(endIdx + 3)].Trim();
     }
 }
