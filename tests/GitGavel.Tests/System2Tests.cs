@@ -286,6 +286,7 @@ public class System2Tests
         capturedPrompt.Should().Contain("ANTI-SCOPE-CREEP RULE");
         capturedPrompt.Should().Contain("PR Diff Patch:");
         capturedPrompt.Should().Contain("+ var x = list[index];");
+        capturedPrompt.Should().NotContain("public class OrderProcessor {}");
     }
 
     [Fact]

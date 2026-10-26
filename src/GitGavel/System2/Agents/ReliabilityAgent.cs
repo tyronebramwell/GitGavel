@@ -20,7 +20,9 @@ public class ReliabilityAgent : ISubagent
 
     public async Task<SubagentResult> ExecuteAsync(RepoContext context, CancellationToken ct = default)
     {
-        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
+        var summaries = context.AstSummaries.Count > 0
+            ? context.AstSummaries
+            : await Task.Run(() => AstAnalyzer.AnalyzeAll(context.SourceFiles), ct);
         var hotspots = summaries.Where(s => s.IsComplexityHotspot).ToList();
 
         var promptBuilder = new StringBuilder();
@@ -68,7 +70,10 @@ public class ReliabilityAgent : ISubagent
                 promptBuilder.AppendLine("PR Diff Patch:");
                 promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
             }
-            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
+            else
+            {
+                promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
+            }
         }
 
         promptBuilder.AppendLine();
