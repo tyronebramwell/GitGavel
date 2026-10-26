@@ -79,8 +79,8 @@ public static partial class FindingParser
         var attackVector = GetString(elem, "attackVector");
         var owasp = GetString(elem, "owaspCategory") ?? GetString(elem, "owasp");
         var testTier = GetString(elem, "testTier") ?? GetString(elem, "tier");
-        var testDefectType = GetString(elem, "testDefectType") ?? GetString(elem, "defectType");
-        var defectType = GetString(elem, "defectType") ?? testDefectType;
+        var testDefectType = GetString(elem, "testDefectType");
+        var defectType = GetString(elem, "defectType");
 
         var startLine = GetInt(elem, "startLine", 1);
         var endLine = GetInt(elem, "endLine", startLine);

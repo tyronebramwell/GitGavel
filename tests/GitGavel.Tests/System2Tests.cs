@@ -289,6 +289,130 @@ public class System2Tests
     }
 
     [Fact]
+    public void FindingParser_DecoupledDefectTypeAndTestDefectType_NoCrossPollution()
+    {
+        // 1. Only defectType provided
+        var rawReliability = """
+        [
+          {
+            "title": "State Overwrite Bug",
+            "summary": "Loop overwrites shared variable",
+            "category": "Reliability",
+            "severity": "High",
+            "filePath": "src/Loop.cs",
+            "defectType": "LogicDefect"
+          }
+        ]
+        """;
+        var findings1 = FindingParser.ParseFindings(rawReliability, "ReliabilityAgent", "Reliability");
+        findings1.Should().HaveCount(1);
+        findings1[0].DefectType.Should().Be("LogicDefect");
+        findings1[0].TestDefectType.Should().BeNull();
+
+        // 2. Only testDefectType provided
+        var rawTesting = """
+        [
+          {
+            "title": "Missing Unit Test",
+            "summary": "Core service lacks branch coverage",
+            "category": "Testing",
+            "severity": "Medium",
+            "filePath": "tests/ServiceTests.cs",
+            "testTier": "Unit",
+            "testDefectType": "MissingTest"
+          }
+        ]
+        """;
+        var findings2 = FindingParser.ParseFindings(rawTesting, "TestSentinelAgent", "Testing");
+        findings2.Should().HaveCount(1);
+        findings2[0].TestDefectType.Should().Be("MissingTest");
+        findings2[0].DefectType.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_InPullRequestMode_OnlyAuditsFilesWithDiffPatches()
+    {
+        var capturedPrompt = "";
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 50,
+                CompletionTokens = 10,
+                DurationMs = 10,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles =
+            [
+                new ScannedFile("src/ChangedFile.cs", "/mock/src/ChangedFile.cs", 40, 800, "public class ChangedFile {}", false, false, "@@ -1,3 +1,5 @@\n+ var x = 1;"),
+                new ScannedFile("src/UnchangedFile.cs", "/mock/src/UnchangedFile.cs", 100, 2000, "public class UnchangedFile {}", false, false, null)
+            ],
+            TestFiles = [],
+            SarifFindings = [],
+            ActivePullRequest = new PullRequestContext
+            {
+                PrNumber = 76,
+                Title = "Test PR filtering",
+                HeadSha = "123456",
+                ChangedFiles = [new PullRequestChangedFile("src/ChangedFile.cs", "modified", 2, 0, "patch")]
+            }
+        };
+
+        var result = await agent.ExecuteAsync(context);
+        result.IsSuccess.Should().BeTrue();
+        capturedPrompt.Should().Contain("src/ChangedFile.cs");
+        capturedPrompt.Should().NotContain("src/UnchangedFile.cs");
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_CapsPromptAtTwentySourceFiles()
+    {
+        var capturedPrompt = "";
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 50,
+                CompletionTokens = 10,
+                DurationMs = 10,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var sourceFiles = Enumerable.Range(1, 25)
+            .Select(i => new ScannedFile($"src/File{i:D2}.cs", $"/mock/src/File{i:D2}.cs", 10 + i, 100 * i, $"public class File{i:D2} {{}}", false))
+            .ToList();
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = sourceFiles,
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.ExecuteAsync(context);
+        result.IsSuccess.Should().BeTrue();
+        capturedPrompt.Should().Contain("src/File25.cs");
+        capturedPrompt.Should().Contain("src/File06.cs");
+        capturedPrompt.Should().NotContain("src/File05.cs");
+        capturedPrompt.Should().NotContain("src/File01.cs");
+    }
+
+    [Fact]
     public async Task SubagentOrchestrator_RunsAllEnabledSubagentsConcurrently()
     {
         var mockClient = new MockLlmClient(req =>

@@ -55,9 +55,10 @@ public class ReliabilityAgent : ISubagent
         promptBuilder.AppendLine("### Source Code Under Audit:");
         var hotspotPaths = new HashSet<string>(hotspots.Select(h => h.RelativePath));
         var prioritizedFiles = context.SourceFiles
-            .Where(f => !f.IsTest)
+            .Where(f => !f.IsTest && (!context.IsPullRequestMode || !string.IsNullOrWhiteSpace(f.DiffPatch)))
             .OrderByDescending(f => hotspotPaths.Contains(f.RelativePath))
-            .ThenByDescending(f => f.LineCount);
+            .ThenByDescending(f => f.LineCount)
+            .Take(20);
 
         foreach (var src in prioritizedFiles)
         {
