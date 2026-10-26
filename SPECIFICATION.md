@@ -92,7 +92,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.1 📋 Spec Drift Agent
 * **Role**: Detects divergence between written requirements and code implementation.
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Inputs**:
   * *Full Repo Mode*: Spec files (`specs/*.md`, `docs/**/*.md`), OpenAPI schemas, public controllers/interfaces, and DTOs.
   * *PR Review Mode*: Spec files + only the source files and diff hunks modified in the PR.
@@ -100,7 +100,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.2 🛡️ Security Auditor Agent
 * **Role**: Identifies security vulnerabilities, credential leaks, and authorization flaws.
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Inputs**:
   * *Full Repo Mode*: Auth handlers, database queries, API clients, app configuration, and static security scan reports (SARIF).
   * *PR Review Mode*: Only the changed files and unified diff patches in the PR (+ any SARIF alerts on those changed lines).
@@ -116,7 +116,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.4 🐛 Reliability & Performance Agent (`ReliabilityAgent`)
 * **Role**: Audits production code for functional bugs, performance issues, performance improvements, provable logic defects, runtime crash paths, concurrency defects, and resource leaks.
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Core Responsibilities**:
   * **Provable Logic Defects & Bugs**: Detects off-by-one errors, inverted conditions, state overwrite bugs inside loops, broken pagination, silent data truncation, and incorrect edge-case handling.
   * **Crash Paths & Exception Safety**: Flags unhandled exceptions, null/empty dereference risks, unsafe type casts, division-by-zero or index-out-of-range paths, and missing validation at external API or I/O boundaries.
@@ -130,7 +130,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.5 🧪 Test Sentinel Agent
 * **Role**: Audits automated testing across the entire test pyramid (**Unit**, **Integration**, and **End-to-End / E2E**).
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Core Responsibilities**:
   * **Missing Test Detection**: Identifies critical production classes, public methods, core business rules, and error paths that lack automated tests across unit, integration, and E2E tiers.
   * **Extra Scenarios & Boundary Coverage**: Uncovers omitted edge cases, boundary conditions, invalid inputs, failure modes, concurrency/race hazards, and regression scenarios not currently exercised in existing test suites.
@@ -381,7 +381,7 @@ subagents:
   reliability:
     enabled: true
     provider: "gemini"
-    model: "gemini-2.5-pro"
+    model: "gemini-3.1-pro-preview"
   refactoring:
     enabled: true
     provider: "gemini"

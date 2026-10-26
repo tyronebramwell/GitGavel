@@ -80,6 +80,7 @@ public class ConfigurationTests
         config.Github.ProjectsV2.Columns.Done.Should().Be("Done");
         config.Subagents.Reliability.Should().NotBeNull();
         config.Subagents.Reliability.Enabled.Should().BeTrue();
+        config.Subagents.Reliability.Model.Should().Be("gemini-3.1-pro-preview");
         config.Github.PullRequests.PostInlineComments.Should().BeFalse();
         config.Github.PullRequests.PostSummaryComment.Should().BeTrue();
     }
@@ -93,12 +94,12 @@ public class ConfigurationTests
           reliability:
             enabled: true
             provider: "gemini"
-            model: "gemini-2.5-pro"
+            model: "gemini-3.1-pro-preview"
         """;
 
         var config = ConfigLoader.LoadFromString(yaml);
         config.Subagents.Reliability.Enabled.Should().BeTrue();
-        config.Subagents.Reliability.Model.Should().Be("gemini-2.5-pro");
+        config.Subagents.Reliability.Model.Should().Be("gemini-3.1-pro-preview");
     }
 
     [Fact]

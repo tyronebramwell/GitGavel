@@ -59,7 +59,7 @@ public class SubagentsConfig
     {
         Enabled = true,
         Provider = "gemini",
-        Model = "gemini-2.5-pro"
+        Model = "gemini-3.1-pro-preview"
     };
 
     public SubagentSettings Refactoring { get; set; } = new()

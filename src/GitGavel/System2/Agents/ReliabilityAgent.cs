@@ -12,7 +12,7 @@ public class ReliabilityAgent : ISubagent
 
     public string Name => "ReliabilityAgent";
 
-    public ReliabilityAgent(ILlmClient llmClient, string model = "gemini-2.5-pro")
+    public ReliabilityAgent(ILlmClient llmClient, string model = "gemini-3.1-pro-preview")
     {
         _llmClient = llmClient;
         _model = model;

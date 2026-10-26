@@ -176,9 +176,11 @@ public class System2Tests
     public async Task ReliabilityAgent_ExecuteAsync_ProducesReliabilityFindings()
     {
         var capturedPrompt = "";
+        string? capturedModel = null;
         var mockClient = new MockLlmClient(req =>
         {
             capturedPrompt = req.Prompt;
+            capturedModel = req.Model;
             return new LlmResponse
             {
                 Content = """
@@ -207,7 +209,7 @@ public class System2Tests
             };
         });
 
-        var agent = new ReliabilityAgent(mockClient, "gemini-2.5-pro");
+        var agent = new ReliabilityAgent(mockClient);
         var context = new RepoContext
         {
             RootDirectory = "/mock/repo",
@@ -237,6 +239,7 @@ public class System2Tests
         capturedPrompt.Should().Contain("Provable Logic Defects & Bugs");
         capturedPrompt.Should().Contain("src/Worker.cs");
         capturedPrompt.Should().NotContain("tests/WorkerTests.cs");
+        capturedModel.Should().Be("gemini-3.1-pro-preview");
     }
 
     [Fact]
@@ -553,6 +556,48 @@ public class System2Tests
         // Subagent override applied
         var geminiOverride = (GeminiLlmClient)factory.CreateClient(new SubagentSettings { Provider = "gemini", TimeoutSeconds = 600 }, config);
         geminiOverride.Timeout.Should().Be(TimeSpan.FromSeconds(600));
+    }
+
+    [Fact]
+    public async Task GeminiLlmClient_StripsModelsPrefix_WhenBuildingUrl()
+    {
+        string? requestedUrl = null;
+        var handler = new SimpleTestHttpMessageHandler(req =>
+        {
+            requestedUrl = req.RequestUri?.ToString();
+            var json = """
+            {
+              "candidates": [
+                {
+                  "content": {
+                    "parts": [{ "text": "{\"findings\": []}" }]
+                  }
+                }
+              ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        var client = new GeminiLlmClient(apiKey: "test-key", httpClient: new HttpClient(handler));
+        var response = await client.GenerateAsync(new LlmRequest
+        {
+            Prompt = "Hello",
+            Model = "models/gemini-3.1-pro-preview"
+        });
+
+        response.Content.Should().Be("{\"findings\": []}");
+        requestedUrl.Should().Contain("/models/gemini-3.1-pro-preview:generateContent");
+        requestedUrl.Should().NotContain("/models/models/");
+    }
+
+    private class SimpleTestHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(handler(request));
     }
 
     [Fact]
