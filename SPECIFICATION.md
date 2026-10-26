@@ -4,10 +4,10 @@
 
 **GitGavel** is an automated repository and pull request audit tool designed to run in continuous integration (CI) or as a standalone CLI. It employs a **hybrid System 1 + System 2 multi-agent architecture** that operates across two execution modes using the **same specialized subagents**:
 
-* **System 2 (Generative Subagents)**: Deep reasoning agents (powered by Claude/Gemini/OpenAI) audit across specification alignment (`SpecDriftAgent`), security posture (`SecurityAuditorAgent`), code architecture (`RefactoringAgent`), automated test completeness (`TestSentinelAgent`), and open issue completion (`IssueResolutionAgent`).
+* **System 2 (Generative Subagents)**: Deep reasoning agents (powered by Claude/Gemini/OpenAI) audit across specification alignment (`SpecDriftAgent`), security posture (`SecurityAuditorAgent`), functional reliability & performance (`ReliabilityAgent`), code architecture (`RefactoringAgent`), automated test completeness (`TestSentinelAgent`), and open issue completion (`IssueResolutionAgent`).
   * In **Full Repository Audit Mode** (scheduled/manual runs), the subagents audit the full repository scope to maintain the engineering backlog and close completed issues.
-  * In **Pull Request Review Mode** (auto-triggered on every PR), the **same subagents** run strictly against the **files and diffs changed in the Pull Request**, generating targeted inline PR review comments and a PR review summary.
-* **System 1 (Jev Decision Engine)**: A fast, probabilistic decision engine (powered by TypeSafe Jev) validates candidate findings and issue resolution proofs in milliseconds—performing pairwise duplicate checks against existing issues or existing PR review comments via `Noul` probabilities, verifying completed issues via `Noul`, calibrating urgency scoring via `Score`, and routing findings to **GitHub Projects (v2)** columns (`Backlog`, `AI Triage`, `Done`, `Discard`) or **GitHub Pull Request Reviews** (`PostInlineReview`, `SummaryCommentOnly`, `Discard`) via `Choice`.
+  * In **Pull Request Review Mode** (auto-triggered on every PR), the **same subagents** run strictly against the **files and diffs changed in the Pull Request**, generating a consolidated PR review summary and targeted domain reports.
+* **System 1 (Jev Decision Engine)**: A fast, probabilistic decision engine (powered by TypeSafe Jev) validates candidate findings and issue resolution proofs in milliseconds—performing pairwise duplicate checks against existing issues or existing PR review comments via `Noul` probabilities, verifying completed issues via `Noul`, calibrating urgency scoring via `Score`, and routing findings to **GitHub Projects (v2)** columns (`Backlog`, `AI Triage`, `Done`, `Discard`) or **GitHub Pull Request Reviews** (`IncludeInReview`, `Discard`) via `Choice`.
 * **Developer Reporting Engine**: Emits dedicated, structured reports (Run Log, Tickets & PR Review Report, Security Report, Code Quality Report, Test Sentinel Report) available both locally and as GitHub Action Step Summaries and downloadable CI artifacts.
 
 ---
@@ -15,8 +15,8 @@
 ## 2. Core Objectives & Non-Goals
 
 ### Objectives
-- **Multi-Domain Specialization**: Dedicated subagents for Spec Drift, Security, Architecture/Refactoring, Automated Testing, and Issue Resolution Verification to eliminate prompt dilution across both repository audits and PR reviews.
-- **Unified Agent Pipeline for PR Reviews (Diff-Only Scope)**: Automatically runs on every Pull Request, scoping the `SpecDrift`, `Security`, `Refactoring`, and `TestSentinel` subagents strictly to the **changes in the PR** (modified files and diff hunks) and posting their triaged findings as inline PR review comments and a summary comment on the Pull Request.
+- **Multi-Domain Specialization**: Dedicated subagents for Spec Drift, Security, Reliability & Performance, Architecture/Refactoring, Automated Testing, and Issue Resolution Verification to eliminate prompt dilution across both repository audits and PR reviews.
+- **Unified Agent Pipeline for PR Reviews (Diff-Only Scope)**: Automatically runs on every Pull Request, scoping the `SpecDrift`, `Security`, `Reliability`, `Refactoring`, and `TestSentinel` subagents strictly to the **changes in the PR** (modified files and diff hunks) and posting triaged findings as a consolidated PR review summary and domain reports on the Pull Request (avoiding PR clutter from noisy inline diff comments).
 - **Comprehensive Test Pyramid Auditing**: Automated detection of missing unit, integration, and end-to-end (E2E) tests, extra scenario coverage, and test reliability improvements.
 - **Automated Completed Issue Closure**: Continuous verification of open GitHub issues against the current codebase and git commit history, automatically closing resolved issues with an explanatory comment detailing how the issue was fixed and referencing the specific commit SHAs.
 - **Probabilistic Gatekeeping with Jev**: Sub-second triage, calibrated confidence scoring, high-confidence issue closure verification, and automated routing to an "Unsure / Maintainer Review" queue when confidence is borderline.
@@ -46,6 +46,7 @@ flowchart TD
     subgraph System2 ["2. Discovery & Synthesis (Same Generative Subagents - System 2)"]
         SpecAgent["📋 Spec Drift Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
         SecAgent["🛡️ Security Auditor Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
+        RelAgent["🐛 Reliability & Performance Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
         RefactorAgent["⚙️ Refactor & Architecture Agent\n(Gemini 2.5 Flash / GPT-4o-mini)"]
         TestAgent["🧪 Test Sentinel Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
         ResolutionAgent["✅ Issue Resolution Agent\n(Gemini 2.5 Flash / Claude Sonnet)"]
@@ -55,7 +56,7 @@ flowchart TD
         JevDedupe["Jev Noul (Boolean Probability)\n'Duplicate of Issue #X or Existing PR Comment?'"]
         JevVerifyFix["Jev Noul (Boolean Probability)\n'Is Issue #X truly resolved by commits?'"]
         JevScore["Jev Score (1 - 5)\n'Calibrated Priority & Urgency'"]
-        JevRoute["Jev Choice\nRepo Mode: 'Backlog | Needs Review | Discard'\nPR Mode: 'PostInlineReview | SummaryCommentOnly | Discard'"]
+        JevRoute["Jev Choice\nRepo Mode: 'Backlog | Needs Review | Discard'\nPR Mode: 'IncludeInReview | Discard'"]
         
         JevDedupe -->|Novel Finding| JevScore
         JevVerifyFix -->|Confirmed Fixed| JevRoute
@@ -64,7 +65,7 @@ flowchart TD
 
     subgraph Targets ["4. Outputs & Execution"]
         GH_Projects["Full Repo Mode:\nCreate Issues, Close Fixed Issues & Sync Projects v2"]
-        GH_PR["PR Review Mode:\nPost Inline Diff Review Comments & Summary on PR"]
+        GH_PR["PR Review Mode:\nPost Consolidated PR Review Summary & Domain Reports"]
         ReportsEngine["Developer Reporting Engine\n- Audit Run Log\n- Tickets & PR Review Report\n- Security Report\n- Code Quality Report\n- Test Sentinel Report"]
     end
 
@@ -87,7 +88,7 @@ flowchart TD
 
 ## 4. Specialized Subagents & Execution Modes (System 2: Discovery)
 
-All four core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `RefactoringAgent`, and `TestSentinelAgent`) are shared between **Full Repository Audit Mode** and **Pull Request Review Mode**. When running in **Pull Request Review Mode**, `RepoContext` is filtered strictly to the **files and diff patches modified in the Pull Request**, ensuring the agents only review changes introduced by the PR.
+All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `ReliabilityAgent`, `RefactoringAgent`, and `TestSentinelAgent`) are shared between **Full Repository Audit Mode** and **Pull Request Review Mode**. When running in **Pull Request Review Mode**, `RepoContext` is filtered strictly to the **files and diff patches modified in the Pull Request**, ensuring the agents only review changes introduced by the PR.
 
 ### 4.1 📋 Spec Drift Agent
 * **Role**: Detects divergence between written requirements and code implementation.
@@ -95,7 +96,7 @@ All four core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Refac
 * **Inputs**:
   * *Full Repo Mode*: Spec files (`specs/*.md`, `docs/**/*.md`), OpenAPI schemas, public controllers/interfaces, and DTOs.
   * *PR Review Mode*: Spec files + only the source files and diff hunks modified in the PR.
-* **Output**: Candidate findings highlighting missing endpoints, parameter drift, or divergent logic (created as backlog issues in Repo Mode, or posted as PR review comments in PR Mode).
+* **Output**: Candidate findings highlighting missing endpoints, parameter drift, or divergent logic (created as backlog issues in Repo Mode, or included in PR review summaries in PR Mode).
 
 ### 4.2 🛡️ Security Auditor Agent
 * **Role**: Identifies security vulnerabilities, credential leaks, and authorization flaws.
@@ -113,7 +114,21 @@ All four core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Refac
   * *PR Review Mode*: AST complexity and unified diff patches for only the files modified in the PR.
 * **Output**: Candidate findings proposing structural refactoring, abstraction, or consolidation of duplicated logic.
 
-### 4.4 🧪 Test Sentinel Agent
+### 4.4 🐛 Reliability & Performance Agent (`ReliabilityAgent`)
+* **Role**: Audits production code for functional bugs, performance issues, performance improvements, provable logic defects, runtime crash paths, concurrency defects, and resource leaks.
+* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Core Responsibilities**:
+  * **Provable Logic Defects & Bugs**: Detects off-by-one errors, inverted conditions, state overwrite bugs inside loops, broken pagination, silent data truncation, and incorrect edge-case handling.
+  * **Crash Paths & Exception Safety**: Flags unhandled exceptions, null/empty dereference risks, unsafe type casts, division-by-zero or index-out-of-range paths, and missing validation at external API or I/O boundaries.
+  * **Concurrency & Async Defects**: Identifies race conditions on shared state, deadlocks, synchronous blocking on asynchronous calls (`Task.Result` / `.Wait()`), `async void` methods, unawaited tasks, and missing `CancellationToken` propagation.
+  * **Resource Leaks**: Uncovers undisposed `IDisposable` / `IAsyncDisposable` objects (`Stream`, `Process`, `HttpClient`, database connections, file handles, sockets) and unbounded in-memory collections or caches.
+  * **Performance Issues & Improvements**: Detects $O(N^2)$ or N+1 API/database loops, redundant allocations or serialization in hot paths, unbounded network/file reads, and actionable performance optimization opportunities.
+* **Inputs**:
+  * *Full Repo Mode*: Production source files, AST symbol/complexity summaries, service implementations, and I/O or concurrency-heavy modules.
+  * *PR Review Mode*: Only the production source files and unified diff patches modified in the PR.
+* **Output**: Candidate findings (`Category: "Reliability"`) detailing the root cause, failure mode or performance bottleneck, and a concrete, drop-in remediation code snippet.
+
+### 4.5 🧪 Test Sentinel Agent
 * **Role**: Audits automated testing across the entire test pyramid (**Unit**, **Integration**, and **End-to-End / E2E**).
 * **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
 * **Core Responsibilities**:
@@ -126,7 +141,7 @@ All four core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Refac
   * *PR Review Mode*: Only the production and test files/diffs changed in the PR, verifying that new or modified code in the PR has adequate Unit/Integration/E2E test coverage.
 * **Output**: Candidate findings citing untested logic, missing test scenarios, concrete test implementation blueprints with executable code snippets, and targeted test tier classification.
 
-### 4.5 ✅ Issue Resolution & Closure Agent
+### 4.6 ✅ Issue Resolution & Closure Agent
 * **Role**: Audits open GitHub issues against the current repository state and commit history to detect completed work and automatically close resolved issues with a clear audit trail.
 * **Model Tier**: Fast / High Reasoning (Gemini 2.5 Flash / Claude 3.5 Sonnet).
 * **Core Responsibilities**:
@@ -136,14 +151,14 @@ All four core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Refac
 * **Inputs**: Open GitHub issues (title, body, embedded `gitgavel-metadata`, target file paths), git commit log (`git log`), and current file contents of affected modules.
 * **Output**: Candidate issue closure records containing the target Issue `#`, a verification summary of how the fix was implemented, the list of resolving commit SHAs, and confidence evidence for System 1 validation.
 
-### 4.6 🔍 Pull Request Review Execution Mode (Diff-Scoped Multi-Agent Review)
+### 4.7 🔍 Pull Request Review Execution Mode (Diff-Scoped Multi-Agent Review)
 When GitGavel runs in **Pull Request Review Mode** (automatically triggered on `pull_request` events in GitHub Actions or via `--pr <number>`):
 1. **Diff-Only Context Scoping**: GitGavel fetches the Pull Request's changed files, unified diff patches (`@@ -a,b +c,d @@`), and existing PR review comments/threads. It scopes `RepoContext.SourceFiles` and `RepoContext.TestFiles` **exclusively to the files modified in the PR**, attaching each file's unified diff patch so the subagents only inspect lines changed in the PR.
-2. **Same Subagents, Unified Pipeline**: The exact same enabled System 2 subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `RefactoringAgent`, `TestSentinelAgent`) execute in parallel over the PR-scoped context.
-3. **Jev Triage & PR Comment Deduplication**: Candidate findings from all four subagents are evaluated by Jev (`Noul` deduplication against existing PR review comments and open issues, `Score` priority calibration, and `Choice` routing into `PostInlineReview`, `SummaryCommentOnly`, or `Discard`).
-4. **PR Review & Domain Report Publishing**: Instead of creating standalone backlog issues, GitGavel submits:
-   * A GitHub Pull Request Review containing line-level inline diff comments (with remediation code blocks) and a consolidated PR review summary comment.
-   * **Dedicated Domain Report Comments**: For every domain where findings are detected in the PR (`Security`, `SpecDrift` / `Refactoring`, or `Testing`), GitGavel automatically posts that domain's full developer report (`Security Audit Report`, `Code Quality & Spec Report`, or `Test Quality & Coverage Report`) as a dedicated comment on the Pull Request so reviewers can read all findings directly in the PR conversation without digging through CI action artifacts.
+2. **Same Subagents, Unified Pipeline**: The exact same enabled System 2 subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `ReliabilityAgent`, `RefactoringAgent`, `TestSentinelAgent`) execute in parallel over the PR-scoped context.
+3. **Jev Triage & PR Finding Deduplication**: Candidate findings from all five subagents are evaluated by Jev (`Noul` deduplication against existing PR review comments and open issues, `Score` priority calibration, and `Choice` routing into `IncludeInReview` or `Discard`).
+4. **PR Review & Domain Report Publishing**: Instead of creating standalone backlog issues or scattering noisy inline comments across the diff, GitGavel submits:
+   * **Consolidated GitHub Pull Request Review Summary**: A single, clean review summary synthesizing all actionable findings, affected files/lines, and remediation steps without cluttering the PR diff with low-value inline comments.
+   * **Dedicated Domain Report Comments**: For every domain where findings are detected in the PR (`Security`, `SpecDrift` / `Reliability` / `Refactoring`, or `Testing`), GitGavel automatically posts that domain's full developer report (`Security Audit Report`, `Code Quality & Spec Report`, or `Test Quality & Coverage Report`) as a dedicated comment on the Pull Request so reviewers can read all findings directly in the PR conversation without digging through CI action artifacts.
 
 ---
 
@@ -155,9 +170,9 @@ Once candidate findings, PR review comments, and issue resolution proofs are gen
 * **Primitive**: `Noul` (Boolean probability $0.0 \dots 1.0$).
 * **Queries**:
   * *Issue Deduplication*: `Does candidate finding [Candidate_A] represent the same core problem or refactoring target as existing issue #[Issue_N]?`
-  * *PR Comment Deduplication*: `Does candidate PR comment [Comment_A] duplicate an existing review comment or thread on Pull Request #[PR_N]?`
+  * *PR Finding Deduplication*: `Does candidate PR finding [Finding_A] duplicate an existing review comment or thread on Pull Request #[PR_N]?`
 * **Behavior**:
-  * $P \ge 0.85$ (`autoBacklogConfidence`): Flagged as duplicate $\rightarrow$ **Skip creation / Suppress PR comment**.
+  * $P \ge 0.85$ (`autoBacklogConfidence`): Flagged as duplicate $\rightarrow$ **Skip creation / Suppress from PR summary**.
   * $P < \text{humanReviewConfidence}$ ($0.50\text{–}0.60$): Novel finding $\rightarrow$ **Proceed to scoring**.
   * $\text{humanReviewConfidence} \le P < 0.85$: Uncertain $\rightarrow$ Suppress if `P3`; for `P0`–`P2`, add reference to existing issue and route to human review.
 
@@ -181,12 +196,12 @@ Once candidate findings, PR review comments, and issue resolution proofs are gen
 ### 5.4 Automated Routing with Jev `Choice`
 * **Primitive**: `Choice`
   * *Backlog & Issue Lifecycle*: `["Backlog", "NeedsHumanReview", "CloseResolved", "Discard"]`
-  * *PR Review Actions*: `["PostInlineReview", "SummaryCommentOnly", "Discard"]`
+  * *PR Review Actions*: `["IncludeInReview", "Discard"]`
 * **Routing Logic**:
   * **`Backlog`**: Finding is novel, high-confidence, and meets the severity threshold. Issue created and assigned to the project backlog.
   * **`NeedsHumanReview`**: Finding is borderline or potential duplicate. Issue created with `needs-maintainer-review` label and placed in the project `AI Triage` column.
   * **`CloseResolved`**: Open issue is verified as fixed ($P \ge 0.90$). Issue is commented on with the fix explanation and commit SHAs, closed as completed, and moved to the `Done` column in GitHub Projects v2.
-  * **`PostInlineReview` / `SummaryCommentOnly`**: High-signal PR review finding is posted either as an inline diff review comment or rolled into the PR summary comment.
+  * **`IncludeInReview`**: High-signal PR review finding is consolidated into the top-level PR review summary comment and domain reports.
   * **`Discard`**: Finding is low-value, subjective, or probable hallucination. Silently suppressed.
 
 ---
@@ -198,7 +213,7 @@ GitGavel generates five distinct reports at the end of each run, saving them to 
 ```
 reports/
 ├── 1_audit-run.md            <-- Execution log, timings, tokens, triage & PR/closure stats
-├── 2_tickets-report.md       <-- Issues created, updated, closed, skipped, and PR comments (table format)
+├── 2_tickets-report.md       <-- Issues created, updated, closed, skipped, and PR reviews (table format)
 ├── 2_tickets-report.json     <-- Structured JSON for programmatic parsing
 ├── 3_security-report.md      <-- Deep vulnerability breakdown & OWASP mapping
 ├── 4_code-quality-report.md  <-- Spec drift, complexity hotspots, refactoring
@@ -210,14 +225,14 @@ Designed for maintainers to see exactly what the auditor did during execution:
 * **Execution Metrics**: Start time, duration, git commit SHA, branch, active PR number (if run in PR context).
 * **Scope Scanned**: Total files indexed, spec files parsed, test files discovered, commits analyzed, PR review threads audited, lines of code evaluated.
 * **Agent Diagnostics**: LLM token consumption (input/output), API latency per subagent.
-* **Jev Triage Statistics**: Total findings evaluated, accepted count, duplicate rejections, borderline issues routed to human triage, issues verified & closed, PR review comments posted, suppressed noise count.
+* **Jev Triage Statistics**: Total findings evaluated, accepted count, duplicate rejections, borderline issues routed to human triage, issues verified & closed, PR review findings summarized, suppressed noise count.
 
 ### 6.2 Report 2: Tickets & PR Review Report (`2_tickets-report.md` & `.json`)
 A comprehensive status ledger of all actions taken against GitHub Issues and Pull Requests:
 * **Created Issues Table**: Issue #, title, category, Jev urgency score, target project column link.
 * **Closed Issues Table**: Issue #, title, resolution summary, fixing commit SHA(s), Jev resolution confidence ($P$), and closure timestamp.
 * **Updated Issues Table**: Existing issues appended with new findings or partial fix notes.
-* **PR Review Actions Table**: PR #, review verdict, inline comments posted (file & line), existing review threads audited/resolved, and suppressed duplicate comments.
+* **PR Review Actions Table**: PR #, review verdict, summarized findings (category, file & line), existing review threads audited/resolved, and suppressed duplicate comments.
 * **Skipped / Duplicate Findings**: Findings suppressed by Jev `Noul` with references to the existing open issues or PR threads they matched.
 
 ### 6.3 Report 3: Security Report (`3_security-report.md`)
@@ -231,8 +246,9 @@ A dedicated security briefing for tech leads and security teams:
   * Correlation with any static scanner SARIF reports (e.g., Semgrep / Trivy).
 
 ### 6.4 Report 4: Code Quality & Spec Report (`4_code-quality-report.md`)
-A focused maintainability and architectural assessment:
+A focused maintainability, reliability, and architectural assessment:
 * **Spec Drift Analysis**: Discrepancies between requirements docs/OpenAPI and code implementation.
+* **Reliability, Bugs & Performance**: Provable logic defects, crash paths, concurrency hazards, resource leaks, and performance bottlenecks/improvements identified by `ReliabilityAgent`.
 * **Architectural Hotspots**: High cyclomatic/cognitive complexity classes, domain leaks.
 * **Refactoring Catalog**: Proposed design pattern improvements and code de-duplication plans.
 
@@ -305,27 +321,29 @@ closed_at: 2026-10-20T14:15:00Z
 ```
 
 ### 7.3 Pull Request Review & Comment Format
-When auditing a Pull Request, GitGavel posts inline review comments on affected diff lines and a top-level PR review summary comment:
+When auditing a Pull Request, GitGavel publishes a single consolidated PR review summary comment (avoiding diff clutter from noisy inline comments) along with dedicated domain reports for affected categories:
 
 ```markdown
 ## ⚖️ GitGavel Pull Request Audit Summary
 
-| Domain | Findings | Inline Comments | Prior Threads Resolved |
-| :--- | :---: | :---: | :---: |
-| 🛡️ Security | 0 | 0 | 1 / 1 |
-| 📋 Spec Alignment | 1 | 1 | — |
-| ⚙️ Architecture | 0 | 0 | — |
-| 🧪 Test Coverage | 1 | 1 | 2 / 2 |
+| Domain | Findings | Prior Threads Resolved |
+| :--- | :---: | :---: |
+| 🛡️ Security | 0 | 1 / 1 |
+| 📋 Spec Alignment | 1 | — |
+| ⚙️ Architecture | 0 | — |
+| 🧪 Test Coverage | 1 | 2 / 2 |
 
-### 🔍 Key Observations & Existing Review Audit
+### 🔍 Key Observations & Action Items
 - **Resolved Review Threads**: Confirmed that previous review feedback on `GitService.cs` (env var isolation) was addressed in commit `cfad09a`.
-- **Open Action Items**: Added 2 inline comments on the diff regarding missing boundary tests and spec configuration alignment.
+- **Open Action Items**:
+  - `Spec Alignment`: Divergence in configuration schema between `SPECIFICATION.md` and `Settings.cs`.
+  - `Test Coverage`: Missing boundary scenario tests for token expiry handling in `AuthServiceTests.cs`.
 
 ---
 <!-- gitgavel-pr-review
 pr_number: 42
 head_sha: cfad09afc6f436fb3af957ff2d94eba2d3e1ea36
-inline_comments_posted: 2
+findings_summarized: 2
 agent: PrReviewAuditor
 reviewed_at: 2026-10-20T14:15:00Z
 -->
@@ -359,6 +377,10 @@ subagents:
     provider: "gemini"
     model: "gemini-2.5-pro"
     sarifReports: ["reports/semgrep.sarif"]
+  reliability:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-pro"
   refactoring:
     enabled: true
     provider: "gemini"
@@ -408,9 +430,7 @@ github:
     enabled: true
     onlyChangedFiles: true            # Scope subagents strictly to files & diffs changed in the PR
     auditExistingReviews: true        # Deduplicate against existing PR review threads & comments
-    postInlineComments: true          # Post line-level comments on PR diffs
-    postSummaryComment: true          # Post overall PR review summary comment
-    maxInlineCommentsPerPr: 10
+    postSummaryComment: true          # Post consolidated PR review summary comment (avoids inline diff clutter)
     defaultReviewEvent: "COMMENT"     # options: "COMMENT" | "REQUEST_CHANGES" | "APPROVE"
   issueClosure:
     enabled: true
@@ -521,5 +541,6 @@ jobs:
 | **Phase 3** | **Developer Reporting Engine** | - Output generators for developer reports (`audit-run`, `tickets-report`, `security-report`, `code-quality-report`)<br>- Markdown and structured JSON export<br>- `$GITHUB_STEP_SUMMARY` integration |
 | **Phase 4** | **GitHub Projects v2 & Packaging** | - Octokit REST client & GraphQL client for Projects v2<br>- Multi-stage Docker image published to GHCR (`ghcr.io/.../gitgavel`)<br>- GitHub Action `action.yml` wrapper and artifact upload workflow |
 | **Phase 5** | **Test Sentinel Subagent** | - Test Sentinel Agent auditing Unit, Integration, and E2E test suites<br>- Detection of untested business logic, missing edge cases, and flakiness<br>- Report 5 (`5_test-quality-report.md`) generation<br>- Automated triage and GitHub backlog sync for test gaps |
-| **Phase 6** | **Diff-Scoped PR Review Mode** | - Auto-trigger on all Pull Requests (`pull_request` workflow event)<br>- Scope `RepoContext` strictly to files & diff patches changed in the PR<br>- Execute the same System 2 subagents (`SpecDrift`, `Security`, `Refactoring`, `TestSentinel`) on PR changes<br>- Jev `Noul` deduplication against existing PR review comments & inline/summary PR review publishing |
+| **Phase 6** | **Diff-Scoped PR Review Mode** | - Auto-trigger on all Pull Requests (`pull_request` workflow event)<br>- Scope `RepoContext` strictly to files & diff patches changed in the PR<br>- Execute the same System 2 subagents (`SpecDrift`, `Security`, `Refactoring`, `TestSentinel`) on PR changes<br>- Jev `Noul` deduplication against existing PR review comments & consolidated PR review summary publishing |
 | **Phase 7** | **Automated Issue Resolution & Closure** | - Issue Resolution Agent matching open GitHub issues against codebase state and `git log` history<br>- Jev `Noul` high-confidence completion verification ($P \ge 0.90$)<br>- Automated closing comment explaining how the issue was fixed with resolving commit SHAs, closing the issue as `completed`, and moving Projects v2 status to `Done` |
+| **Phase 8** | **Reliability & Performance Subagent** | - `ReliabilityAgent` auditing for functional bugs, provable logic defects, crash paths, concurrency hazards, resource leaks, and performance issues/improvements<br>- Integration into full-repo backlog triage, diff-scoped PR reviews, and `4_code-quality-report.md` |
