@@ -15,10 +15,10 @@
 Software repositories suffer from invisible technical debt: specification drift between documentation and code, creeping architectural complexity, and subtle security vulnerabilities that accumulate unnoticed.
 
 **GitGavel** acts as an autonomous backlog sentinel:
-1. **System 2 (Generative Discovery)**: Dispatches specialized LLM subagents in parallel to audit specification divergence, static security advisories (SARIF), and Roslyn-analyzed architectural hotspots.
-2. **System 1 (TypeSafe Jev Decision Engine)**: Gates findings through deterministic, probabilistic decision intelligence—evaluating semantic deduplication (`Noul`), urgency/blast radius calibration (`Score` 1–5), and column destination routing (`Choice`).
-3. **Developer Reporting Engine**: Emits 4 markdown reports, machine-readable JSON, and GitHub Actions step summaries.
-4. **GitHub Projects (v2) Automation**: Publishes deduplicated GitHub issues tagged with deterministic metadata comments and updates Projects v2 Kanban boards via GraphQL.
+1. **System 2 (Generative Discovery)**: Dispatches specialized LLM subagents in parallel to audit specification divergence, static security advisories (SARIF), Roslyn-analyzed architectural hotspots, automated test completeness, and completed issue verification.
+2. **System 1 (TypeSafe Jev Decision Engine)**: Gates findings through deterministic, probabilistic decision intelligence—evaluating semantic deduplication (`Noul`), urgency/blast radius calibration (`Score` 1–5), issue resolution proof verification, and destination routing (`Choice`).
+3. **Developer Reporting Engine**: Emits 5 markdown reports, machine-readable JSON, sticky Pull Request summaries, and GitHub Actions step summaries.
+4. **GitHub Projects (v2) Automation**: Publishes deduplicated GitHub issues tagged with deterministic metadata comments, closes verified fixed issues, and updates Projects v2 Kanban boards via GraphQL.
 
 ---
 
@@ -30,37 +30,47 @@ flowchart TD
         A[Source Code & AST] 
         B[Specs & Docs]
         C[SARIF Reports]
+        Commits[Git History & Open Issues]
     end
 
     subgraph System2["System 2: Generative Discovery"]
         D[SpecDriftAgent]
         E[SecurityAuditor]
         F[RefactoringAgent]
+        Test[TestSentinelAgent]
+        Res[IssueResolutionAgent]
     end
 
     subgraph System1["System 1: TypeSafe Jev Decision Engine"]
         G{Noul Deduplication}
+        FixProof{Noul Fix Verification}
         H[Score Urgency Calibration 1-5]
-        I{Choice Column Routing}
+        I{Choice Routing}
     end
 
     subgraph Output["Actions & Developer Reports"]
         J[GitHub Issues + Projects v2]
+        PR[PR Summary & Domain Reports]
         K["1_audit-run.md"]
         L["2_tickets-report.md & .json"]
         M["3_security-report.md"]
         N["4_code-quality-report.md"]
+        O["5_test-quality-report.md"]
     end
 
-    A --> D & E & F
+    A --> D & E & F & Test
     B --> D
     C --> E
+    Commits --> Res
 
-    D & E & F -->|Finding Candidates| G
+    D & E & F & Test -->|Finding Candidates| G
+    Res -->|Closure Proofs| FixProof
     G -->|Novel Findings| H
     G -->|Duplicate Prob >= 0.85| Output
+    FixProof -->|Verified Fixed| I
     H --> I
     I -->|Backlog / Needs Review| J
+    I -->|PR Mode Summary| PR
     I --> Output
     H --> Output
 ```
@@ -130,6 +140,8 @@ GitGavel provides three Spectre.Console-powered CLI verbs:
 - `-c, --config <PATH>`: Path to `.gitgavel.yml` configuration file (default: `.gitgavel.yml`).
 - `-d, --dir <PATH>`: Target repository directory to audit (default: `.`).
 - `-r, --repo <OWNER/REPO>`: Target GitHub repository coordinates (e.g. `octocat/Hello-World`).
+- `--pr <NUMBER>`: Optional Pull Request number to audit for PR reviews and domain reports.
+- `--allow-external-paths`: Explicitly permit configuration, SARIF, or reporting paths outside the repository root.
 - `--dry-run`: Skip creating GitHub issues and modifying Projects v2 boards.
 - `--mock`: Run with simulated subagents and mock triage.
 - `--mock-llm`: Run with simulated subagents while keeping the live TypeSafe Jev decision engine active.
@@ -158,22 +170,43 @@ scope:
       - "**/obj/**"
       - "**/*.Tests/**"
       - "**/.git/**"
+  tests:
+    include:
+      - "**/*.Tests/**"
+      - "tests/**"
+      - "**/*.spec.*"
+      - "**/*.test.*"
 
 subagents:
-  apiKeyEnv: "GEMINI_API_KEY"
+  apiKeyEnv: "AI_API_KEY"
+  timeoutSeconds: 300                 # Request timeout for LLMs (default: 300s / 5 mins)
   specDrift:
     enabled: true
     provider: "gemini"
-    model: "gemini-2.5-flash"
+    model: "gemini-2.5-pro"
   security:
     enabled: true
     provider: "gemini"
-    model: "gemini-2.5-flash"
+    model: "gemini-2.5-pro"
     sarifReports: ["reports/semgrep.sarif"]
+  reliability:
+    enabled: false                    # Phase 8: Reliability & Performance Subagent (roadmap)
+    provider: "gemini"
+    model: "gemini-2.5-pro"
   refactoring:
     enabled: true
     provider: "gemini"
     model: "gemini-2.5-flash"
+  tests:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-pro"
+    tiers: ["unit", "integration", "e2e"]
+  issueResolution:
+    enabled: true
+    provider: "gemini"
+    model: "gemini-2.5-flash"
+    autoCloseCompleted: true
 
 triage:
   engine: "jev"
@@ -182,6 +215,7 @@ triage:
     thresholds:
       autoBacklogConfidence: 0.85
       humanReviewConfidence: 0.50
+      autoCloseIssueConfidence: 0.90
     dedupeWithNoul: true
   maxIssuesPerRun: 4
 
@@ -196,16 +230,28 @@ reporting:
     tickets: true
     security: true
     codeQuality: true
+    testQuality: true
 
 github:
   labels:
     - "ai-backlog"
+  pullRequests:
+    enabled: true
+    onlyChangedFiles: true
+    auditExistingReviews: true
+    postSummaryComment: true
+    defaultReviewEvent: "COMMENT"
+  issueClosure:
+    enabled: true
+    stateReason: "completed"
   projectsV2:
     enabled: true
     projectNumber: 2
     columns:
       backlog: "Backlog"
       humanReview: "AI Triage"
+      done: "Done"
+      discard: "Discarded"
     fields:
       priority: "Priority"
 ```
@@ -214,12 +260,13 @@ github:
 
 ## Developer Reporting Engine
 
-Every audit run generates 4 structured developer reports in `./reports/`:
+Every audit run generates 5 structured developer reports in `./reports/`:
 
 1. **`1_audit-run.md`**: Executive summary, run duration, LOC scanned, token counts, and Jev funnel metrics.
 2. **`2_tickets-report.md` & `.json`**: Actionable tickets accepted to Backlog or routed to Review, with calibrated Jev urgency scores.
 3. **`3_security-report.md`**: Security vulnerability catalog, OWASP classifications, attack vectors, and verified code remediations.
 4. **`4_code-quality-report.md`**: Spec drift catalog, Roslyn AST cyclomatic complexity hotspots, and refactoring catalog.
+5. **`5_test-quality-report.md`**: Test pyramid completeness across Unit, Integration, and E2E tiers with extra scenario recommendations.
 
 ---
 

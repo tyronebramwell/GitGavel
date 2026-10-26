@@ -78,6 +78,27 @@ public class ConfigurationTests
         config.Triage.Jev.Thresholds.AutoCloseIssueConfidence.Should().Be(0.90);
         config.Reporting.Reports.TestQuality.Should().BeTrue();
         config.Github.ProjectsV2.Columns.Done.Should().Be("Done");
+        config.Subagents.Reliability.Should().NotBeNull();
+        config.Subagents.Reliability.Enabled.Should().BeFalse();
+        config.Github.PullRequests.PostInlineComments.Should().BeFalse();
+        config.Github.PullRequests.PostSummaryComment.Should().BeTrue();
+    }
+
+    [Fact]
+    public void LoadFromString_WithReliabilitySettings_ParsesCorrectly()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          reliability:
+            enabled: true
+            provider: "gemini"
+            model: "gemini-2.5-pro"
+        """;
+
+        var config = ConfigLoader.LoadFromString(yaml);
+        config.Subagents.Reliability.Enabled.Should().BeTrue();
+        config.Subagents.Reliability.Model.Should().Be("gemini-2.5-pro");
     }
 
     [Fact]

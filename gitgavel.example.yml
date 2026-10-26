@@ -25,6 +25,10 @@ subagents:
     provider: "gemini"
     model: "gemini-2.5-pro"
     sarifReports: ["reports/semgrep.sarif"]
+  reliability:
+    enabled: false                    # Phase 8: Reliability & Performance Subagent (in roadmap)
+    provider: "gemini"
+    model: "gemini-2.5-pro"
   refactoring:
     enabled: true
     provider: "gemini"
@@ -72,12 +76,10 @@ github:
     - "ai-backlog"
   pullRequests:
     enabled: true
-    onlyChangedFiles: true
-    auditExistingReviews: true
-    postInlineComments: true
-    postSummaryComment: true
-    maxInlineCommentsPerPr: 10
-    defaultReviewEvent: "COMMENT"
+    onlyChangedFiles: true            # Scope subagents strictly to files & diffs changed in the PR
+    auditExistingReviews: true        # Deduplicate against existing PR review threads & comments
+    postSummaryComment: true          # Post consolidated PR review summary comment (avoids inline diff clutter)
+    defaultReviewEvent: "COMMENT"     # options: "COMMENT" | "REQUEST_CHANGES" | "APPROVE"
   issueClosure:
     enabled: true
     stateReason: "completed"

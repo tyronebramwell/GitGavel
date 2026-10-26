@@ -55,6 +55,13 @@ public class SubagentsConfig
         SarifReports = ["reports/semgrep.sarif"]
     };
 
+    public SubagentSettings Reliability { get; set; } = new()
+    {
+        Enabled = false,
+        Provider = "gemini",
+        Model = "gemini-2.5-pro"
+    };
+
     public SubagentSettings Refactoring { get; set; } = new()
     {
         Enabled = true,
@@ -156,7 +163,7 @@ public class PullRequestsConfig
     public bool Enabled { get; set; } = true;
     public bool OnlyChangedFiles { get; set; } = true;
     public bool AuditExistingReviews { get; set; } = true;
-    public bool PostInlineComments { get; set; } = true;
+    public bool PostInlineComments { get; set; } = false; // Disabled by default in favor of consolidated PR review summary
     public bool PostSummaryComment { get; set; } = true;
     public int MaxInlineCommentsPerPr { get; set; } = 10;
     public string DefaultReviewEvent { get; set; } = "COMMENT"; // "COMMENT" | "REQUEST_CHANGES" | "APPROVE"
