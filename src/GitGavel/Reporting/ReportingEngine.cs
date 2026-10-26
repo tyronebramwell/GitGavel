@@ -81,7 +81,8 @@ public class ReportingEngine
         }
 
         if (activeFindings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
-                                    f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase)))
+                                    f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase) ||
+                                    f.Category.Equals("Reliability", StringComparison.OrdinalIgnoreCase)))
         {
             var qualBody = CodeQualityReporter.Generate(filteredCtx) + "\n<!-- gitgavel-sticky-comment: code-quality-report -->\n";
             await gitHubService.PostPullRequestCommentAsync(owner, repo, prNumber, qualBody, ct);

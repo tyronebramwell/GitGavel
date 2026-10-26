@@ -19,6 +19,7 @@ public record FindingCandidate
     public string? OwaspCategory { get; init; }
     public string? TestTier { get; init; } // Unit, Integration, E2E
     public string? TestDefectType { get; init; } // MissingTest, ExtraScenario, TestQuality
+    public string? DefectType { get; init; } // LogicDefect, CrashPath, Concurrency, ResourceLeak, Performance
     public string? Details { get; init; }
     public List<string> References { get; init; } = [];
     public DateTime CreatedAtUtc { get; init; } = DateTime.UtcNow;

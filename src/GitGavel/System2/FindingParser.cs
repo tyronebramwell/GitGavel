@@ -80,6 +80,7 @@ public static partial class FindingParser
         var owasp = GetString(elem, "owaspCategory") ?? GetString(elem, "owasp");
         var testTier = GetString(elem, "testTier") ?? GetString(elem, "tier");
         var testDefectType = GetString(elem, "testDefectType") ?? GetString(elem, "defectType");
+        var defectType = GetString(elem, "defectType") ?? testDefectType;
 
         var startLine = GetInt(elem, "startLine", 1);
         var endLine = GetInt(elem, "endLine", startLine);
@@ -102,6 +103,7 @@ public static partial class FindingParser
             OwaspCategory = owasp,
             TestTier = testTier,
             TestDefectType = testDefectType,
+            DefectType = defectType,
             Details = details,
             References = references
         };
@@ -354,6 +356,12 @@ public static partial class FindingParser
             defaults.Add("[Microsoft Learn: Unit testing best practices with .NET Core and .NET Standard](https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices)");
             defaults.Add("[Martin Fowler: Practical Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)");
             defaults.Add("[Stack Overflow: Automated test design patterns and assertions](https://stackoverflow.com/questions/tagged/unit-testing)");
+        }
+        else if (category.Equals("Reliability", StringComparison.OrdinalIgnoreCase) || category.Contains("Bug", StringComparison.OrdinalIgnoreCase) || category.Contains("Performance", StringComparison.OrdinalIgnoreCase))
+        {
+            defaults.Add("[Microsoft Learn: Reliability and Exception Handling Best Practices](https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions)");
+            defaults.Add("[Microsoft Learn: Async/Await Best Practices and Concurrency](https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming)");
+            defaults.Add("[Stack Overflow: Performance optimization and resource management in .NET](https://stackoverflow.com/questions/tagged/performance)");
         }
 
         return defaults;

@@ -579,6 +579,7 @@ public class GitHubTests
     [InlineData("Security", "Security")]
     [InlineData("SpecDrift", "CodeQuality")]
     [InlineData("Refactoring", "CodeQuality")]
+    [InlineData("Reliability", "CodeQuality")]
     [InlineData("Testing", "TestQuality")]
     [InlineData("None", "")]
     public async Task ReportingEngine_PublishPullRequestDomainReports_PostsOnlyMatchingDomainOrNone(string category, string expectedDomain)

@@ -79,7 +79,7 @@ public class ConfigurationTests
         config.Reporting.Reports.TestQuality.Should().BeTrue();
         config.Github.ProjectsV2.Columns.Done.Should().Be("Done");
         config.Subagents.Reliability.Should().NotBeNull();
-        config.Subagents.Reliability.Enabled.Should().BeFalse();
+        config.Subagents.Reliability.Enabled.Should().BeTrue();
         config.Github.PullRequests.PostInlineComments.Should().BeFalse();
         config.Github.PullRequests.PostSummaryComment.Should().BeTrue();
     }

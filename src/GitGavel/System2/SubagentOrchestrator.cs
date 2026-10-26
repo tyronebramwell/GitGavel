@@ -59,6 +59,12 @@ public class SubagentOrchestrator : ISubagentOrchestrator
             agents.Add(new SecurityAuditorAgent(client, config.Subagents.Security.Model));
         }
 
+        if (config.Subagents.Reliability.Enabled)
+        {
+            var client = _clientFactory.CreateClient(config.Subagents.Reliability, config);
+            agents.Add(new ReliabilityAgent(client, config.Subagents.Reliability.Model));
+        }
+
         if (config.Subagents.Refactoring.Enabled)
         {
             var client = _clientFactory.CreateClient(config.Subagents.Refactoring, config);

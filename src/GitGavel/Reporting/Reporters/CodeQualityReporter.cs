@@ -62,11 +62,61 @@ public class CodeQualityReporter : BaseMarkdownReporter
             }
         }
 
-        // 2. Architectural Complexity Hotspots
+        // 2. Reliability, Bugs & Performance Analysis
+        var reliabilityFindings = ctx.Orchestration.AllFindings
+            .Where(f => f.Category.Equals("Reliability", StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        sb.AppendLine($"## 2. Reliability, Bugs & Performance Analysis ({reliabilityFindings.Count} items)");
+        sb.AppendLine();
+
+        if (reliabilityFindings.Count == 0)
+        {
+            sb.AppendLine("✅ **No functional bugs, crash paths, concurrency hazards, or resource leaks detected.**");
+        }
+        else
+        {
+            for (var i = 0; i < reliabilityFindings.Count; i++)
+            {
+                var f = reliabilityFindings[i];
+                sb.AppendLine($"### 2.{i + 1} [{f.Severity}] {f.Title}");
+                sb.AppendLine($"- **File**: `{f.FilePath}:{f.StartLine}`");
+                sb.AppendLine($"- **Severity**: `{f.Severity}`");
+                if (!string.IsNullOrWhiteSpace(f.DefectType))
+                {
+                    sb.AppendLine($"- **Defect Type**: `{f.DefectType}`");
+                }
+                sb.AppendLine();
+                sb.AppendLine($"**Root Cause & Risk**: {f.Summary}");
+                if (!string.IsNullOrWhiteSpace(f.Details))
+                {
+                    sb.AppendLine();
+                    sb.AppendLine($"**Context & Details**: {f.Details}");
+                }
+                sb.AppendLine();
+                sb.AppendLine("**Remediation:**");
+                sb.AppendLine(f.SuggestedRemediation);
+                sb.AppendLine();
+                if (f.References.Count > 0)
+                {
+                    sb.AppendLine("**Learning References:**");
+                    foreach (var r in f.References)
+                    {
+                        sb.AppendLine($"- {r}");
+                    }
+                    sb.AppendLine();
+                }
+                sb.AppendLine("---");
+                sb.AppendLine();
+            }
+        }
+        sb.AppendLine();
+
+        // 3. Architectural Complexity Hotspots
         var astSummaries = ctx.RepoContext.AstSummaries;
         var hotspots = astSummaries.Where(s => s.IsComplexityHotspot).OrderByDescending(s => s.TotalComplexityScore).ToList();
 
-        sb.AppendLine($"## 2. Architectural Hotspots ({hotspots.Count} flagged)");
+        sb.AppendLine($"## 3. Architectural Hotspots ({hotspots.Count} flagged)");
         sb.AppendLine();
 
         if (hotspots.Count == 0)
@@ -85,12 +135,12 @@ public class CodeQualityReporter : BaseMarkdownReporter
         }
         sb.AppendLine();
 
-        // 3. Refactoring Catalog
+        // 4. Refactoring Catalog
         var refactoringFindings = ctx.Orchestration.AllFindings
             .Where(f => f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
-        sb.AppendLine($"## 3. Refactoring & Maintainability Catalog ({refactoringFindings.Count} recommendations)");
+        sb.AppendLine($"## 4. Refactoring & Maintainability Catalog ({refactoringFindings.Count} recommendations)");
         sb.AppendLine();
 
         if (refactoringFindings.Count == 0)
@@ -102,7 +152,7 @@ public class CodeQualityReporter : BaseMarkdownReporter
             for (var i = 0; i < refactoringFindings.Count; i++)
             {
                 var f = refactoringFindings[i];
-                sb.AppendLine($"### 3.{i + 1} [{f.Severity}] {f.Title}");
+                sb.AppendLine($"### 4.{i + 1} [{f.Severity}] {f.Title}");
                 sb.AppendLine($"- **Target**: `{f.FilePath}` (lines {f.StartLine}–{f.EndLine})");
                 sb.AppendLine();
                 sb.AppendLine($"**Problem**: {f.Summary}");
