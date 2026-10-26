@@ -11,13 +11,15 @@ public class GeminiLlmClient : ILlmClient
     private readonly HttpClient _httpClient;
     private readonly string _apiKey;
 
-    public GeminiLlmClient(string? apiKey = null, HttpClient? httpClient = null)
+    public TimeSpan Timeout => _httpClient.Timeout;
+
+    public GeminiLlmClient(string? apiKey = null, HttpClient? httpClient = null, TimeSpan? timeout = null)
     {
         _apiKey = apiKey
             ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY")
             ?? Environment.GetEnvironmentVariable("AI_API_KEY")
             ?? "";
-        _httpClient = httpClient ?? new HttpClient { Timeout = TimeSpan.FromSeconds(180) };
+        _httpClient = httpClient ?? new HttpClient { Timeout = timeout ?? TimeSpan.FromSeconds(300) };
     }
 
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)

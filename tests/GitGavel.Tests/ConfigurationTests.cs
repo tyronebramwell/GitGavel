@@ -78,6 +78,27 @@ public class ConfigurationTests
         config.Triage.Jev.Thresholds.AutoCloseIssueConfidence.Should().Be(0.90);
         config.Reporting.Reports.TestQuality.Should().BeTrue();
         config.Github.ProjectsV2.Columns.Done.Should().Be("Done");
+        config.Subagents.Reliability.Should().NotBeNull();
+        config.Subagents.Reliability.Enabled.Should().BeFalse();
+        config.Github.PullRequests.PostInlineComments.Should().BeFalse();
+        config.Github.PullRequests.PostSummaryComment.Should().BeTrue();
+    }
+
+    [Fact]
+    public void LoadFromString_WithReliabilitySettings_ParsesCorrectly()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          reliability:
+            enabled: true
+            provider: "gemini"
+            model: "gemini-2.5-pro"
+        """;
+
+        var config = ConfigLoader.LoadFromString(yaml);
+        config.Subagents.Reliability.Enabled.Should().BeTrue();
+        config.Subagents.Reliability.Model.Should().Be("gemini-2.5-pro");
     }
 
     [Fact]
@@ -121,5 +142,31 @@ public class ConfigurationTests
         config.Triage.Jev.Thresholds.AutoCloseIssueConfidence.Should().Be(0.92);
         config.Github.PullRequests.DefaultReviewEvent.Should().Be("REQUEST_CHANGES");
         config.Github.ProjectsV2.Columns.Done.Should().Be("Completed");
+    }
+
+    [Fact]
+    public void LoadFromString_DefaultTimeout_Is300Seconds()
+    {
+        var config = ConfigLoader.LoadFromString("");
+        config.Subagents.TimeoutSeconds.Should().Be(300);
+        config.Subagents.Tests.TimeoutSeconds.Should().BeNull();
+    }
+
+    [Fact]
+    public void LoadFromString_WithCustomGlobalAndSubagentTimeout_ParsesCorrectly()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          timeoutSeconds: 450
+          tests:
+            enabled: true
+            timeoutSeconds: 600
+        """;
+
+        var config = ConfigLoader.LoadFromString(yaml);
+        config.Subagents.TimeoutSeconds.Should().Be(450);
+        config.Subagents.Tests.TimeoutSeconds.Should().Be(600);
+        config.Subagents.Security.TimeoutSeconds.Should().BeNull();
     }
 }

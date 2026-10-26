@@ -379,6 +379,38 @@ public class System2Tests
     }
 
     [Fact]
+    public void LlmClientFactory_DefaultTimeout_Is300Seconds()
+    {
+        var factory = new LlmClientFactory();
+        var config = new GitGavelConfig();
+
+        var gemini = (GeminiLlmClient)factory.CreateClient(new SubagentSettings { Provider = "gemini" }, config);
+        gemini.Timeout.Should().Be(TimeSpan.FromSeconds(300));
+
+        var openai = (OpenAiLlmClient)factory.CreateClient(new SubagentSettings { Provider = "openai" }, config);
+        openai.Timeout.Should().Be(TimeSpan.FromSeconds(300));
+
+        var anthropic = (AnthropicLlmClient)factory.CreateClient(new SubagentSettings { Provider = "anthropic" }, config);
+        anthropic.Timeout.Should().Be(TimeSpan.FromSeconds(300));
+    }
+
+    [Fact]
+    public void LlmClientFactory_WithGlobalAndPerAgentTimeout_AppliesCorrectTimeout()
+    {
+        var factory = new LlmClientFactory();
+        var config = new GitGavelConfig();
+        config.Subagents.TimeoutSeconds = 400;
+
+        // Global config applied
+        var geminiGlobal = (GeminiLlmClient)factory.CreateClient(new SubagentSettings { Provider = "gemini" }, config);
+        geminiGlobal.Timeout.Should().Be(TimeSpan.FromSeconds(400));
+
+        // Subagent override applied
+        var geminiOverride = (GeminiLlmClient)factory.CreateClient(new SubagentSettings { Provider = "gemini", TimeoutSeconds = 600 }, config);
+        geminiOverride.Timeout.Should().Be(TimeSpan.FromSeconds(600));
+    }
+
+    [Fact]
     public async Task System2Agents_IncludeFullSpecAndAllSourceFilesWithoutTruncation()
     {
         var capturedPrompts = new List<string>();

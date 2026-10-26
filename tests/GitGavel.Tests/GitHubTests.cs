@@ -270,6 +270,7 @@ public class GitHubTests
     {
         var mock = new MockGitHubService();
         var config = new GitGavelConfig();
+        config.Github.PullRequests.PostInlineComments = true;
 
         var prContext = new PullRequestContext
         {
@@ -323,6 +324,58 @@ public class GitHubTests
         mock.PostedPrReviews[0].SummaryBody.Should().Contain("Changed Files Audited");
         mock.PostedPrReviews[0].SummaryBody.Should().Contain("<!-- gitgavel-pr-review");
         mock.PostedPrReviews[0].InlineBodies[0].Should().Contain("```suggestion");
+    }
+
+    [Fact]
+    public async Task GitHubService_PostPullRequestReview_WhenInlineCommentsDisabledByDefault_GeneratesOnlySummaryReview()
+    {
+        var mock = new MockGitHubService();
+        var config = new GitGavelConfig(); // PostInlineComments defaults to false
+
+        var prContext = new PullRequestContext
+        {
+            PrNumber = 42,
+            Title = "Update GitService",
+            BaseRef = "main",
+            HeadRef = "feature/pr-42",
+            HeadSha = "cfad09afc6f436fb3af957ff2d94eba2d3e1ea36",
+            ChangedFiles =
+            [
+                new PullRequestChangedFile("src/GitGavel/Git/GitService.cs", "modified", 12, 2, "@@ -65,2 +65,12 @@")
+            ]
+        };
+
+        var decisions = new List<PrCommentTriageDecision>
+        {
+            new()
+            {
+                Finding = new FindingCandidate
+                {
+                    FilePath = "src/GitGavel/Git/GitService.cs",
+                    StartLine = 70,
+                    EndLine = 74,
+                    Category = "Testing",
+                    Severity = "Medium",
+                    Title = "Add boundary test",
+                    Summary = "Cover maxCount <= 0.",
+                    AgentName = "TestSentinelAgent",
+                    SuggestedRemediation = "if (maxCount <= 0) return [];"
+                },
+                JevScore = 3.2,
+                PriorityLabel = "P2",
+                Action = PrCommentAction.PostInlineReview,
+                Confidence = 0.92
+            }
+        };
+
+        var posted = await mock.PostPullRequestReviewAsync("my-org", "my-repo", prContext, decisions, config);
+
+        posted.PrNumber.Should().Be(42);
+        posted.InlineCommentsPosted.Should().Be(0);
+        posted.SummaryPosted.Should().BeTrue();
+        mock.PostedPrReviews.Should().HaveCount(1);
+        mock.PostedPrReviews[0].InlineBodies.Should().BeEmpty();
+        mock.PostedPrReviews[0].SummaryBody.Should().Contain("## ⚖️ GitGavel Pull Request Audit Summary");
     }
 
     [Fact]
@@ -467,6 +520,7 @@ public class GitHubTests
     {
         var mock = new MockGitHubService();
         var config = new GitGavelConfig();
+        config.Github.PullRequests.PostInlineComments = true;
 
         var complexPatch = string.Join("\n",
             "@@ -5,3 +5,4 @@",

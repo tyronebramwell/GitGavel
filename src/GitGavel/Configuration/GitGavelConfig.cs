@@ -38,6 +38,7 @@ public class SubagentsConfig
 {
     public string ApiKeyEnv { get; set; } = "AI_API_KEY";
     public string? ApiKey { get; set; }
+    public int TimeoutSeconds { get; set; } = 300;
 
     public SubagentSettings SpecDrift { get; set; } = new()
     {
@@ -52,6 +53,13 @@ public class SubagentsConfig
         Provider = "gemini",
         Model = "gemini-2.5-pro",
         SarifReports = ["reports/semgrep.sarif"]
+    };
+
+    public SubagentSettings Reliability { get; set; } = new()
+    {
+        Enabled = false,
+        Provider = "gemini",
+        Model = "gemini-2.5-pro"
     };
 
     public SubagentSettings Refactoring { get; set; } = new()
@@ -82,6 +90,7 @@ public class SubagentSettings
     public bool Enabled { get; set; } = true;
     public string Provider { get; set; } = "gemini";
     public string Model { get; set; } = "gemini-2.5-pro";
+    public int? TimeoutSeconds { get; set; }
 }
 
 public class SecuritySubagentSettings : SubagentSettings
@@ -154,7 +163,7 @@ public class PullRequestsConfig
     public bool Enabled { get; set; } = true;
     public bool OnlyChangedFiles { get; set; } = true;
     public bool AuditExistingReviews { get; set; } = true;
-    public bool PostInlineComments { get; set; } = true;
+    public bool PostInlineComments { get; set; } = false; // Disabled by default in favor of consolidated PR review summary
     public bool PostSummaryComment { get; set; } = true;
     public int MaxInlineCommentsPerPr { get; set; } = 10;
     public string DefaultReviewEvent { get; set; } = "COMMENT"; // "COMMENT" | "REQUEST_CHANGES" | "APPROVE"
