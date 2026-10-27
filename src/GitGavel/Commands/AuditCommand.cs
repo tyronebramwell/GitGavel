@@ -188,19 +188,79 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         ISubagentOrchestrator orchestrator = _injectedOrchestrator ?? new SubagentOrchestrator(llmClientFactory);
         OrchestrationResult orchestrationResult = null!;
 
-        await AnsiConsole.Status()
-            .Spinner(Spinner.Known.BouncingBar)
-            .StartAsync("Executing System 2 Generative Subagents (SpecDrift, Security, Refactoring, TestSentinel)...", async ctx =>
+        var enabledAgents = new List<string>();
+        if (config.Subagents.SpecDrift?.Enabled == true) enabledAgents.Add("SpecDriftAgent");
+        if (config.Subagents.Security?.Enabled == true) enabledAgents.Add("SecurityAuditor");
+        if (config.Subagents.Reliability?.Enabled == true) enabledAgents.Add("ReliabilityAgent");
+        if (config.Subagents.Refactoring?.Enabled == true) enabledAgents.Add("RefactoringAgent");
+        if (config.Subagents.Tests?.Enabled == true) enabledAgents.Add("TestSentinelAgent");
+
+        AnsiConsole.MarkupLine($"[cyan]i[/] Launching [bold]{enabledAgents.Count}[/] System 2 Subagents concurrently: {string.Join(", ", enabledAgents.Select(a => $"[bold]{a}[/]"))}...");
+        AnsiConsole.WriteLine();
+
+        var pending = new HashSet<string>();
+        var progressLock = new object();
+        StatusContext? statusContext = null;
+
+        Action<SubagentProgress> onProgress = progress =>
+        {
+            lock (progressLock)
             {
-                orchestrationResult = await orchestrator.RunAllAsync(repoContext, config);
+                if (progress.Status == SubagentProgressStatus.Started)
+                {
+                    pending.Add(progress.AgentName);
+                }
+                else if (progress.Status == SubagentProgressStatus.Completed)
+                {
+                    pending.Remove(progress.AgentName);
+                    var findingsCount = progress.Result?.Findings?.Count ?? 0;
+                    var durationSec = progress.ElapsedMs / 1000.0;
+                    var tokens = (progress.Result?.PromptTokens ?? 0) + (progress.Result?.CompletionTokens ?? 0);
+                    var findingsText = findingsCount == 1 ? "1 finding" : $"{findingsCount} findings";
+                    var tokensText = tokens > 0 ? $", {tokens:N0} tokens" : "";
+
+                    var remainingText = pending.Count > 0
+                        ? $"[grey]—[/] [yellow]{pending.Count} still running:[/] {string.Join(", ", pending)}"
+                        : "[grey]—[/] [green]all subagents complete![/]";
+
+                    AnsiConsole.MarkupLine($"  [green]✓[/] [bold]{progress.AgentName}[/] completed in [cyan]{durationSec:F1}s[/] [grey]({findingsText}{tokensText})[/] {remainingText}");
+                }
+                else if (progress.Status == SubagentProgressStatus.Failed)
+                {
+                    pending.Remove(progress.AgentName);
+                    var durationSec = progress.ElapsedMs / 1000.0;
+                    var error = Markup.Escape(progress.Result?.ErrorMessage ?? "Unknown error");
+                    var remainingText = pending.Count > 0
+                        ? $"[grey]—[/] [yellow]{pending.Count} still running:[/] {string.Join(", ", pending)}"
+                        : "[grey]—[/] [green]all subagents complete![/]";
+
+                    AnsiConsole.MarkupLine($"  [red]✗[/] [bold]{progress.AgentName}[/] failed in [cyan]{durationSec:F1}s[/]: [red]{error}[/] {remainingText}");
+                }
+
+                if (statusContext != null)
+                {
+                    statusContext.Status(pending.Count > 0
+                        ? $"Executing System 2 Generative Subagents ({pending.Count} running: {string.Join(", ", pending)})..."
+                        : "Executing System 2 Generative Subagents (completing)...");
+                }
+            }
+        };
+
+        await AnsiConsole.Status()
+            .Spinner(Spinner.Known.Dots)
+            .StartAsync($"Executing System 2 Generative Subagents ({enabledAgents.Count} running)...", async ctx =>
+            {
+                statusContext = ctx;
+                orchestrationResult = await orchestrator.RunAllAsync(repoContext, config, onProgress, cancellationToken);
+                if (orchestrationResult == null)
+                {
+                    orchestrationResult = await orchestrator.RunAllAsync(repoContext, config, cancellationToken);
+                }
+                orchestrationResult ??= new OrchestrationResult();
             });
 
-        AnsiConsole.MarkupLine($"[green]✓[/] System 2 Discovery complete in [cyan]{orchestrationResult.TotalDurationMs}ms[/] (Tokens: [yellow]{orchestrationResult.TotalTokens}[/])\n");
-
-        foreach (var err in orchestrationResult.SubagentResults.Where(r => !r.IsSuccess))
-        {
-            AnsiConsole.MarkupLine($"[red]✗ Subagent {err.AgentName} failed:[/] {Markup.Escape(err.ErrorMessage ?? "Unknown error")}");
-        }
+        AnsiConsole.WriteLine();
+        AnsiConsole.MarkupLine($"[green]✓[/] System 2 Discovery complete in [cyan]{orchestrationResult.TotalDurationMs / 1000.0:F1}s[/] (Total Tokens: [yellow]{orchestrationResult.TotalTokens:N0}[/], Findings: [bold]{orchestrationResult.AllFindings.Count}[/])\n");
 
         // Display Findings Table
         if (orchestrationResult.AllFindings.Count == 0)

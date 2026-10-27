@@ -15,7 +15,7 @@
 Software repositories suffer from invisible technical debt: specification drift between documentation and code, creeping architectural complexity, and subtle security vulnerabilities that accumulate unnoticed.
 
 **GitGavel** acts as an autonomous backlog sentinel:
-1. **System 2 (Generative Discovery)**: Dispatches specialized LLM subagents in parallel to audit specification divergence, static security advisories (SARIF), Roslyn-analyzed architectural hotspots, automated test completeness, and completed issue verification.
+1. **System 2 (Generative Discovery)**: Dispatches specialized LLM subagents in parallel to audit specification divergence, static security advisories (SARIF), reliability & performance bottlenecks, Roslyn-analyzed architectural complexity, automated test completeness, and completed issue verification.
 2. **System 1 (TypeSafe Jev Decision Engine)**: Gates findings through deterministic, probabilistic decision intelligence—evaluating semantic deduplication (`Noul`), urgency/blast radius calibration (`Score` 1–5), issue resolution proof verification, and destination routing (`Choice`).
 3. **Developer Reporting Engine**: Emits 5 markdown reports, machine-readable JSON, sticky Pull Request summaries, and GitHub Actions step summaries.
 4. **GitHub Projects (v2) Automation**: Publishes deduplicated GitHub issues tagged with deterministic metadata comments, closes verified fixed issues, and updates Projects v2 Kanban boards via GraphQL.
@@ -34,23 +34,24 @@ flowchart TD
     end
 
     subgraph System2["System 2: Generative Discovery"]
-        D[SpecDriftAgent]
-        E[SecurityAuditor]
-        F[RefactoringAgent]
-        Test[TestSentinelAgent]
-        Res[IssueResolutionAgent]
+        D["SpecDriftAgent"]
+        E["SecurityAuditor"]
+        Rel["ReliabilityAgent"]
+        F["RefactoringAgent"]
+        Test["TestSentinelAgent"]
+        Res["IssueResolutionAgent"]
     end
 
     subgraph System1["System 1: TypeSafe Jev Decision Engine"]
-        G{Noul Deduplication}
-        FixProof{Noul Fix Verification}
-        H[Score Urgency Calibration 1-5]
-        I{Choice Routing}
+        G{"Noul Deduplication"}
+        FixProof{"Noul Fix Verification"}
+        H["Score Urgency Calibration 1-5"]
+        I{"Choice Routing"}
     end
 
     subgraph Output["Actions & Developer Reports"]
-        J[GitHub Issues + Projects v2]
-        PR[PR Summary & Domain Reports]
+        J["GitHub Issues + Projects v2"]
+        PR["PR Summary & Domain Reports"]
         K["1_audit-run.md"]
         L["2_tickets-report.md & .json"]
         M["3_security-report.md"]
@@ -58,12 +59,12 @@ flowchart TD
         O["5_test-quality-report.md"]
     end
 
-    A --> D & E & F & Test
+    A --> D & E & Rel & F & Test
     B --> D
     C --> E
     Commits --> Res
 
-    D & E & F & Test -->|Finding Candidates| G
+    D & E & Rel & F & Test -->|Finding Candidates| G
     Res -->|Closure Proofs| FixProof
     G -->|Novel Findings| H
     G -->|Duplicate Prob >= 0.85| Output
@@ -145,6 +146,22 @@ GitGavel provides three Spectre.Console-powered CLI verbs:
 - `--dry-run`: Skip creating GitHub issues and modifying Projects v2 boards.
 - `--mock`: Run with simulated subagents and mock triage.
 - `--mock-llm`: Run with simulated subagents while keeping the live TypeSafe Jev decision engine active.
+
+### Real-Time Subagent Progress Streaming
+
+When running `gitgavel audit`, System 2 generative subagents execute concurrently in parallel. The CLI streams real-time progress for each subagent as it runs and completes, showing elapsed execution time, token consumption, findings count, and remaining active agents:
+
+```text
+i Launching 5 System 2 Subagents concurrently: SpecDriftAgent, SecurityAuditor, ReliabilityAgent, RefactoringAgent, TestSentinelAgent...
+
+  ✓ SpecDriftAgent completed in 2.1s (1 finding, 205 tokens) — 4 still running: SecurityAuditor, ReliabilityAgent, RefactoringAgent, TestSentinelAgent
+  ✓ SecurityAuditor completed in 4.3s (2 findings, 610 tokens) — 3 still running: ReliabilityAgent, RefactoringAgent, TestSentinelAgent
+  ✓ ReliabilityAgent completed in 5.8s (1 finding, 430 tokens) — 2 still running: RefactoringAgent, TestSentinelAgent
+  ✓ RefactoringAgent completed in 8.2s (1 finding, 350 tokens) — 1 still running: TestSentinelAgent
+  ✓ TestSentinelAgent completed in 11.4s (3 findings, 1,200 tokens) — all subagents complete!
+
+✓ System 2 Discovery complete in 11.4s (Total Tokens: 2,795, Findings: 8)
+```
 
 ---
 
@@ -265,7 +282,7 @@ Every audit run generates 5 structured developer reports in `./reports/`:
 1. **`1_audit-run.md`**: Executive summary, run duration, LOC scanned, token counts, and Jev funnel metrics.
 2. **`2_tickets-report.md` & `.json`**: Actionable tickets accepted to Backlog or routed to Review, with calibrated Jev urgency scores.
 3. **`3_security-report.md`**: Security vulnerability catalog, OWASP classifications, attack vectors, and verified code remediations.
-4. **`4_code-quality-report.md`**: Spec drift catalog, Roslyn AST cyclomatic complexity hotspots, and refactoring catalog.
+4. **`4_code-quality-report.md`**: Spec drift catalog, reliability & performance analysis, Roslyn AST cyclomatic complexity hotspots, and refactoring catalog.
 5. **`5_test-quality-report.md`**: Test pyramid completeness across Unit, Integration, and E2E tiers with extra scenario recommendations.
 
 ---
@@ -314,7 +331,7 @@ jobs:
 
 ## Testing
 
-Run the full xUnit test suite (22 unit tests across all 4 phases):
+Run the full xUnit test suite (147+ unit tests across all System 1 & System 2 subagents, reporters, and CLI pipelines):
 ```bash
 dotnet test
 ```
