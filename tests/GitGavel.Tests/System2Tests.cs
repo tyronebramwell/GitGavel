@@ -1179,7 +1179,7 @@ public class System2Tests
         var specLen = exceedLimitByOne ? 32001 : 32000;
         var srcLen = exceedLimitByOne ? 8001 : 8000;
         var diffLen = exceedLimitByOne ? 4001 : 4000;
-        var issueSrcLen = exceedLimitByOne ? 6001 : 6000;
+        var issueBodyLen = exceedLimitByOne ? 1501 : 1500;
 
         var repoContext = new RepoContext
         {
@@ -1206,19 +1206,22 @@ public class System2Tests
             }
         }
 
-        // Also verify IssueResolutionAgent 6000-character boundary
+        // Also verify IssueResolutionAgent 1500-character issue body boundary and file content omission
         capturedPrompts.Clear();
         var issueAgent = new IssueResolutionAgent(mockClient);
         var issueRepoCtx = new RepoContext
         {
             RootDirectory = "/mock",
             SpecFiles = [],
-            SourceFiles = [new ScannedFile("src/IssueFile.cs", "/mock/src/IssueFile.cs", 100, issueSrcLen, new string('X', issueSrcLen), false)],
+            SourceFiles = [new ScannedFile("src/IssueFile.cs", "/mock/src/IssueFile.cs", 100, 2000, new string('X', 2000), false)],
             SarifFindings = []
         };
 
-        await issueAgent.EvaluateOpenIssuesAsync([new ExistingIssue(1, "Issue 1", "Body", "open")], issueRepoCtx);
+        var issueBody = new string('B', issueBodyLen);
+        await issueAgent.EvaluateOpenIssuesAsync([new ExistingIssue(1, "Issue 1", issueBody, "open")], issueRepoCtx);
         capturedPrompts.Should().ContainSingle();
+        capturedPrompts[0].Should().Contain("(File contents omitted for context size limits. Rely on the AST Symbol Map and Git Commit History above to determine issue resolution.)");
+        capturedPrompts[0].Should().NotContain("--- File: src/IssueFile.cs ---");
         if (exceedLimitByOne)
         {
             capturedPrompts[0].Should().Contain("...(truncated)");
@@ -1227,6 +1230,61 @@ public class System2Tests
         {
             capturedPrompts[0].Should().NotContain("...(truncated)");
         }
+    }
+
+    [Fact]
+    public async Task IssueResolutionAgent_DoesNotAppendSourceAndTestFileContents_PreservingTokenLimitAndMemory()
+    {
+        string? capturedPrompt = null;
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 50,
+                CompletionTokens = 10,
+                DurationMs = 5,
+                ModelUsed = req.Model
+            };
+        });
+
+        var issueAgent = new IssueResolutionAgent(mockClient);
+        var sourceFiles = Enumerable.Range(1, 10).Select(i =>
+            new ScannedFile($"src/LargeFile{i}.cs", $"/mock/src/LargeFile{i}.cs", 1000, 50000, new string('A', 50000), false)
+        ).ToList();
+        var testFiles = Enumerable.Range(1, 10).Select(i =>
+            new ScannedFile($"tests/LargeTest{i}.cs", $"/mock/tests/LargeTest{i}.cs", 1000, 50000, new string('T', 50000), false, true)
+        ).ToList();
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = sourceFiles,
+            TestFiles = testFiles,
+            SarifFindings = [],
+            RecentCommits =
+            [
+                new GitCommitRecord("cfad09afc6f436fb3af957ff2d94eba2d3e1ea36", "cfad09a", "fix(bug): resolve issue 101", "Developer", "2026-10-20T14:04:33Z", ["src/LargeFile1.cs"])
+            ]
+        };
+
+        var issues = new List<ExistingIssue>
+        {
+            new(101, "Fix memory leak in parser", "Details about leak", "open")
+        };
+
+        var result = await issueAgent.EvaluateOpenIssuesAsync(issues, repoContext);
+
+        result.IsSuccess.Should().BeTrue();
+        capturedPrompt.Should().NotBeNull();
+        capturedPrompt!.Should().Contain("(File contents omitted for context size limits. Rely on the AST Symbol Map and Git Commit History above to determine issue resolution.)");
+        capturedPrompt.Should().NotContain("--- File: src/LargeFile");
+        capturedPrompt.Should().NotContain(new string('A', 100));
+        capturedPrompt.Should().NotContain(new string('T', 100));
+        // Ensure prompt length remains compact (under 10KB), avoiding token exhaustion from 1,000,000+ characters of raw code
+        capturedPrompt.Length.Should().BeLessThan(10000);
     }
 
     [Fact]
