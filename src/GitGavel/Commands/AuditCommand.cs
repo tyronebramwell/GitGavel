@@ -213,7 +213,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
                 else if (progress.Status == SubagentProgressStatus.Completed)
                 {
                     pending.Remove(progress.AgentName);
-                    var findingsCount = progress.Result?.Findings.Count ?? 0;
+                    var findingsCount = progress.Result?.Findings?.Count ?? 0;
                     var durationSec = progress.ElapsedMs / 1000.0;
                     var tokens = (progress.Result?.PromptTokens ?? 0) + (progress.Result?.CompletionTokens ?? 0);
                     var findingsText = findingsCount == 1 ? "1 finding" : $"{findingsCount} findings";

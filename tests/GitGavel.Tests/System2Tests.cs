@@ -674,6 +674,36 @@ public class System2Tests
     }
 
     [Fact]
+    public async Task SubagentOrchestrator_WhenProgressCallbackThrows_DoesNotFailOrchestration()
+    {
+        var mockClient = new MockLlmClient(req => new LlmResponse
+        {
+            Content = "[]",
+            PromptTokens = 20,
+            CompletionTokens = 10,
+            DurationMs = 5,
+            ModelUsed = req.Model
+        });
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/Service.cs", "/mock/src/Service.cs", 30, 200, "public class Service {}", false)],
+            SarifFindings = []
+        };
+        var config = new GitGavelConfig();
+
+        // Progress callback throws on every invocation
+        var result = await orchestrator.RunAllAsync(context, config, _ => throw new InvalidOperationException("UI render failure"));
+
+        result.Should().NotBeNull();
+        result.SubagentResults.Should().HaveCount(5);
+        result.SubagentResults.Should().OnlyContain(r => r.IsSuccess, "callback exceptions should not mark successful subagents as failed");
+    }
+
+    [Fact]
     public async Task SubagentOrchestrator_DefaultInterfaceImplementation_DelegatesToThreeParamOverload()
     {
         var wasCalled = false;

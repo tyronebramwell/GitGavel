@@ -88,42 +88,59 @@ public class SubagentOrchestrator : ISubagentOrchestrator
 
         foreach (var agent in agents)
         {
-            onProgress?.Invoke(new SubagentProgress(agent.Name, SubagentProgressStatus.Started));
+            try
+            {
+                onProgress?.Invoke(new SubagentProgress(agent.Name, SubagentProgressStatus.Started));
+            }
+            catch
+            {
+                // Progress callback exceptions should never disrupt orchestration
+            }
         }
 
         // Run subagents in parallel using Task.WhenAll with per-agent progress notification
         var tasks = agents.Select(async agent =>
         {
             var agentSw = Stopwatch.StartNew();
+            SubagentResult result;
+            SubagentProgressStatus status;
             try
             {
-                var result = await agent.ExecuteAsync(context, ct);
+                result = await agent.ExecuteAsync(context, ct);
                 agentSw.Stop();
-                var status = result.IsSuccess ? SubagentProgressStatus.Completed : SubagentProgressStatus.Failed;
-                onProgress?.Invoke(new SubagentProgress(agent.Name, status, result, agentSw.ElapsedMilliseconds));
-                return result;
+                status = result.IsSuccess ? SubagentProgressStatus.Completed : SubagentProgressStatus.Failed;
             }
             catch (Exception ex)
             {
                 agentSw.Stop();
-                var failResult = new SubagentResult
+                result = new SubagentResult
                 {
                     AgentName = agent.Name,
                     IsSuccess = false,
                     ErrorMessage = ex.Message,
                     DurationMs = agentSw.ElapsedMilliseconds
                 };
-                onProgress?.Invoke(new SubagentProgress(agent.Name, SubagentProgressStatus.Failed, failResult, agentSw.ElapsedMilliseconds));
-                return failResult;
+                status = SubagentProgressStatus.Failed;
             }
-        });
+
+            try
+            {
+                onProgress?.Invoke(new SubagentProgress(agent.Name, status, result, agentSw.ElapsedMilliseconds));
+            }
+            catch
+            {
+                // Progress callback exceptions should never disrupt orchestration
+            }
+
+            return result;
+        }).ToList();
 
         var results = await Task.WhenAll(tasks);
 
         sw.Stop();
 
         var allFindings = results
-            .Where(r => r.IsSuccess)
+            .Where(r => r.IsSuccess && r.Findings != null)
             .SelectMany(r => r.Findings)
             .ToList();
 
