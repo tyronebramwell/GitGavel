@@ -583,6 +583,121 @@ public class System2Tests
     }
 
     [Fact]
+    public async Task SubagentOrchestrator_WithOnProgressCallback_EmitsStartedAndCompletedEventsWithTimings()
+    {
+        var progressEvents = new System.Collections.Concurrent.ConcurrentBag<SubagentProgress>();
+        var mockClient = new MockLlmClient(req => new LlmResponse
+        {
+            Content = "[]",
+            PromptTokens = 50,
+            CompletionTokens = 30,
+            DurationMs = 15,
+            ModelUsed = req.Model
+        });
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [new ScannedFile("specs/api.md", "/mock/specs/api.md", 20, 100, "# API Spec", true)],
+            SourceFiles = [new ScannedFile("src/Service.cs", "/mock/src/Service.cs", 30, 200, "public class Service {}", false)],
+            TestFiles = [],
+            SarifFindings = []
+        };
+        var config = new GitGavelConfig();
+
+        var result = await orchestrator.RunAllAsync(context, config, progressEvents.Add);
+
+        result.Should().NotBeNull();
+        result.SubagentResults.Should().HaveCount(5);
+
+        var started = progressEvents.Where(p => p.Status == SubagentProgressStatus.Started).ToList();
+        var completed = progressEvents.Where(p => p.Status == SubagentProgressStatus.Completed).ToList();
+
+        started.Should().HaveCount(5);
+        completed.Should().HaveCount(5);
+
+        var agentNames = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent" };
+        started.Select(s => s.AgentName).Should().BeEquivalentTo(agentNames);
+        completed.Select(c => c.AgentName).Should().BeEquivalentTo(agentNames);
+
+        foreach (var c in completed)
+        {
+            c.Result.Should().NotBeNull();
+            c.Result!.IsSuccess.Should().BeTrue();
+            c.ElapsedMs.Should().BeGreaterThanOrEqualTo(0);
+        }
+    }
+
+    [Fact]
+    public async Task SubagentOrchestrator_WhenSubagentFails_EmitsFailedProgressEvent()
+    {
+        var progressEvents = new System.Collections.Concurrent.ConcurrentBag<SubagentProgress>();
+        var mockClient = new MockLlmClient(req =>
+        {
+            if (req.Prompt.Contains("Security"))
+            {
+                throw new HttpRequestException("Gemini API call failed with status code 500");
+            }
+
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 20,
+                CompletionTokens = 10,
+                DurationMs = 5,
+                ModelUsed = req.Model
+            };
+        });
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/Service.cs", "/mock/src/Service.cs", 30, 200, "public class Service {}", false)],
+            SarifFindings = []
+        };
+        var config = new GitGavelConfig();
+
+        var result = await orchestrator.RunAllAsync(context, config, progressEvents.Add);
+
+        result.Should().NotBeNull();
+        result.SubagentResults.Should().HaveCount(5);
+
+        var failed = progressEvents.Where(p => p.Status == SubagentProgressStatus.Failed).ToList();
+        failed.Should().HaveCount(1);
+        failed[0].AgentName.Should().Be("SecurityAuditor");
+        failed[0].Result.Should().NotBeNull();
+        failed[0].Result!.IsSuccess.Should().BeFalse();
+        failed[0].Result!.ErrorMessage.Should().Contain("Gemini API call failed with status code 500");
+    }
+
+    [Fact]
+    public async Task SubagentOrchestrator_DefaultInterfaceImplementation_DelegatesToThreeParamOverload()
+    {
+        var wasCalled = false;
+        var orchestratorMock = new Moq.Mock<ISubagentOrchestrator> { CallBase = true };
+        orchestratorMock
+            .Setup(o => o.RunAllAsync(Moq.It.IsAny<RepoContext>(), Moq.It.IsAny<GitGavelConfig>(), Moq.It.IsAny<CancellationToken>()))
+            .Callback(() => wasCalled = true)
+            .Returns(Task.FromResult(new OrchestrationResult()));
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await orchestratorMock.Object.RunAllAsync(context, new GitGavelConfig(), _ => { });
+
+        result.Should().NotBeNull();
+        wasCalled.Should().BeTrue();
+    }
+
+    [Fact]
     public async Task SubagentOrchestrator_InPullRequestMode_RunsSameFiveSubagentsOnDiffScopedFiles()
     {
         var capturedPrompts = new List<string>();

@@ -43,7 +43,14 @@ public class SubagentOrchestrator : ISubagentOrchestrator
         _clientFactory = clientFactory;
     }
 
-    public async Task<OrchestrationResult> RunAllAsync(RepoContext context, GitGavelConfig config, CancellationToken ct = default)
+    public Task<OrchestrationResult> RunAllAsync(RepoContext context, GitGavelConfig config, CancellationToken ct = default) =>
+        RunAllAsync(context, config, onProgress: null, ct);
+
+    public async Task<OrchestrationResult> RunAllAsync(
+        RepoContext context,
+        GitGavelConfig config,
+        Action<SubagentProgress>? onProgress,
+        CancellationToken ct = default)
     {
         var agents = new List<ISubagent>();
 
@@ -79,8 +86,38 @@ public class SubagentOrchestrator : ISubagentOrchestrator
 
         var sw = Stopwatch.StartNew();
 
-        // Run subagents in parallel using Task.WhenAll
-        var tasks = agents.Select(agent => agent.ExecuteAsync(context, ct));
+        foreach (var agent in agents)
+        {
+            onProgress?.Invoke(new SubagentProgress(agent.Name, SubagentProgressStatus.Started));
+        }
+
+        // Run subagents in parallel using Task.WhenAll with per-agent progress notification
+        var tasks = agents.Select(async agent =>
+        {
+            var agentSw = Stopwatch.StartNew();
+            try
+            {
+                var result = await agent.ExecuteAsync(context, ct);
+                agentSw.Stop();
+                var status = result.IsSuccess ? SubagentProgressStatus.Completed : SubagentProgressStatus.Failed;
+                onProgress?.Invoke(new SubagentProgress(agent.Name, status, result, agentSw.ElapsedMilliseconds));
+                return result;
+            }
+            catch (Exception ex)
+            {
+                agentSw.Stop();
+                var failResult = new SubagentResult
+                {
+                    AgentName = agent.Name,
+                    IsSuccess = false,
+                    ErrorMessage = ex.Message,
+                    DurationMs = agentSw.ElapsedMilliseconds
+                };
+                onProgress?.Invoke(new SubagentProgress(agent.Name, SubagentProgressStatus.Failed, failResult, agentSw.ElapsedMilliseconds));
+                return failResult;
+            }
+        });
+
         var results = await Task.WhenAll(tasks);
 
         sw.Stop();
