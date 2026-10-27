@@ -50,8 +50,9 @@ public class TypeSafeJevEngine : ITriageEngine
         }
 
         // 2. Identify deterministic override triggers
-        var hasSpecChanges = context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) ||
-                             context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch));
+        var hasSpecChanges = context.IsPullRequestMode
+            ? context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch))
+            : context.SpecFiles.Count > 0 || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
         var hasSarif = context.SarifFindings.Count > 0;
         var hasComplexity = context.AstSummaries.Any(a => a.TotalComplexityScore >= 15 || a.IsComplexityHotspot);
 
@@ -77,7 +78,9 @@ public class TypeSafeJevEngine : ITriageEngine
                     agentName,
                     ShouldRun: true,
                     Confidence: 1.0,
-                    Reason: "Deterministic override: specification documents modified in diff.",
+                    Reason: context.IsPullRequestMode
+                        ? "Deterministic override: specification documents modified in diff."
+                        : "Deterministic override: specification documents present in repository.",
                     IsDeterministicOverride: true));
                 continue;
             }
@@ -156,6 +159,11 @@ public class TypeSafeJevEngine : ITriageEngine
         {
             var changedFilesList = context.ActivePullRequest?.ChangedFiles?.Select(f => (object)new { f.FilePath, f.Additions, f.Deletions }).ToList() ??
                                    context.SourceFiles.Where(f => !string.IsNullOrEmpty(f.DiffPatch)).Select(f => (object)new { FilePath = f.RelativePath, Additions = f.LineCount, Deletions = 0 }).ToList();
+
+            if (changedFilesList.Count == 0 && context.SourceFiles.Count > 0)
+            {
+                changedFilesList = context.SourceFiles.Take(25).Select(f => (object)new { FilePath = f.RelativePath, Additions = f.LineCount, Deletions = 0 }).ToList();
+            }
 
             var metadataState = JsonContent.From(new
             {

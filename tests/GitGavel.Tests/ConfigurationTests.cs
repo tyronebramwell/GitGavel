@@ -83,6 +83,35 @@ public class ConfigurationTests
         config.Subagents.Reliability.Model.Should().Be("gemini-3.1-pro-preview");
         config.Github.PullRequests.PostInlineComments.Should().BeFalse();
         config.Github.PullRequests.PostSummaryComment.Should().BeTrue();
+        config.Triage.SubagentGating.Should().NotBeNull();
+        config.Triage.SubagentGating.Enabled.Should().BeTrue();
+        config.Triage.SubagentGating.MinConfidence.Should().Be(0.50);
+        config.Triage.SubagentGating.AlwaysRunSecurityOnSarifAlerts.Should().BeTrue();
+        config.Triage.SubagentGating.AlwaysRunSpecDriftOnSpecChanges.Should().BeTrue();
+        config.Triage.SubagentGating.BypassInFullRepoMode.Should().BeFalse();
+    }
+
+    [Fact]
+    public void LoadFromString_WithSubagentGatingSettings_ParsesCorrectly()
+    {
+        var yaml = """
+        version: 1
+        triage:
+          subagentGating:
+            enabled: false
+            minConfidence: 0.75
+            alwaysRunSecurityOnSarifAlerts: false
+            alwaysRunSpecDriftOnSpecChanges: false
+            bypassInFullRepoMode: true
+        """;
+
+        var config = ConfigLoader.LoadFromString(yaml);
+
+        config.Triage.SubagentGating.Enabled.Should().BeFalse();
+        config.Triage.SubagentGating.MinConfidence.Should().Be(0.75);
+        config.Triage.SubagentGating.AlwaysRunSecurityOnSarifAlerts.Should().BeFalse();
+        config.Triage.SubagentGating.AlwaysRunSpecDriftOnSpecChanges.Should().BeFalse();
+        config.Triage.SubagentGating.BypassInFullRepoMode.Should().BeTrue();
     }
 
     [Fact]

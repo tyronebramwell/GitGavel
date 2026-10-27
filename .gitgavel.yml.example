@@ -45,9 +45,15 @@ subagents:
     commitLookbackCount: 50
     includeCommitLinks: true
 
-# System 1 Triage Gatekeeper (Jev Decision Engine)
+# System 1 Triage Gatekeeper & Pre-Execution Router (Jev Decision Engine)
 triage:
   engine: "jev" # options: "jev" | "llm-synthesizer"
+  subagentGating:
+    enabled: true                     # Pre-screen subagents with Jev to reduce token usage
+    minConfidence: 0.50               # Minimum Jev Noul probability to activate subagent (default: 0.50)
+    alwaysRunSecurityOnSarifAlerts: true # Hard safety fallback: force SecurityAuditor if SARIF findings exist
+    alwaysRunSpecDriftOnSpecChanges: true # Hard safety fallback: force SpecDrift if specs modified
+    bypassInFullRepoMode: false       # Whether to bypass gating in Full Repo mode (default: false)
   jev:
     apiKeyEnv: "JEV_API_KEY"
     thresholds:
