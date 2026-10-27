@@ -336,6 +336,67 @@ public class System2Tests
     }
 
     [Fact]
+    public async Task ReliabilityAgent_ExecuteAsync_WithNullAstSummariesOrNullSourceFiles_DoesNotThrow()
+    {
+        var mockClient = new MockLlmClient(req => new LlmResponse
+        {
+            Content = "[]",
+            PromptTokens = 10,
+            CompletionTokens = 5,
+            DurationMs = 5,
+            ModelUsed = req.Model
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = null!,
+            TestFiles = [],
+            SarifFindings = [],
+            AstSummaries = null!
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeTrue();
+        result.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SubagentOrchestrator_RunAllAsync_WhenSubagentConfigIsNull_DoesNotThrow()
+    {
+        var mockClient = new MockLlmClient(req => new LlmResponse
+        {
+            Content = "[]",
+            PromptTokens = 10,
+            CompletionTokens = 5,
+            DurationMs = 5,
+            ModelUsed = req.Model
+        });
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
+        var config = new GitGavelConfig();
+        config.Subagents.Reliability = null!;
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 10, 100, "public class App {}", false)],
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await orchestrator.RunAllAsync(context, config);
+
+        result.Should().NotBeNull();
+        result.SubagentResults.Should().HaveCount(4); // 4 remaining enabled subagents
+    }
+
+    [Fact]
     public void FindingParser_DecoupledDefectTypeAndTestDefectType_NoCrossPollution()
     {
         // 1. Only defectType provided

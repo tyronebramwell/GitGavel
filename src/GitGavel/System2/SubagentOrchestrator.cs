@@ -47,31 +47,31 @@ public class SubagentOrchestrator : ISubagentOrchestrator
     {
         var agents = new List<ISubagent>();
 
-        if (config.Subagents.SpecDrift.Enabled)
+        if (config.Subagents.SpecDrift?.Enabled == true)
         {
             var client = _clientFactory.CreateClient(config.Subagents.SpecDrift, config);
             agents.Add(new SpecDriftAgent(client, config.Subagents.SpecDrift.Model));
         }
 
-        if (config.Subagents.Security.Enabled)
+        if (config.Subagents.Security?.Enabled == true)
         {
             var client = _clientFactory.CreateClient(config.Subagents.Security, config);
             agents.Add(new SecurityAuditorAgent(client, config.Subagents.Security.Model));
         }
 
-        if (config.Subagents.Reliability.Enabled)
+        if (config.Subagents.Reliability?.Enabled == true)
         {
             var client = _clientFactory.CreateClient(config.Subagents.Reliability, config);
             agents.Add(new ReliabilityAgent(client, config.Subagents.Reliability.Model));
         }
 
-        if (config.Subagents.Refactoring.Enabled)
+        if (config.Subagents.Refactoring?.Enabled == true)
         {
             var client = _clientFactory.CreateClient(config.Subagents.Refactoring, config);
             agents.Add(new RefactoringAgent(client, config.Subagents.Refactoring.Model));
         }
 
-        if (config.Subagents.Tests.Enabled)
+        if (config.Subagents.Tests?.Enabled == true)
         {
             var client = _clientFactory.CreateClient(config.Subagents.Tests, config);
             agents.Add(new TestSentinelAgent(client, config.Subagents.Tests.Model, config.Subagents.Tests.Tiers));

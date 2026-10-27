@@ -20,9 +20,9 @@ public class ReliabilityAgent : ISubagent
 
     public async Task<SubagentResult> ExecuteAsync(RepoContext context, CancellationToken ct = default)
     {
-        var summaries = context.AstSummaries.Count > 0
+        var summaries = context.AstSummaries != null && context.AstSummaries.Count > 0
             ? context.AstSummaries
-            : await Task.Run(() => AstAnalyzer.AnalyzeAll(context.SourceFiles), ct);
+            : await Task.Run(() => AstAnalyzer.AnalyzeAll(context.SourceFiles ?? []), ct);
         var hotspots = summaries.Where(s => s.IsComplexityHotspot).ToList();
 
         var promptBuilder = new StringBuilder();
@@ -56,7 +56,7 @@ public class ReliabilityAgent : ISubagent
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Source Code Under Audit:");
         var hotspotPaths = new HashSet<string>(hotspots.Select(h => h.RelativePath));
-        var prioritizedFiles = context.SourceFiles
+        var prioritizedFiles = (context.SourceFiles ?? [])
             .Where(f => !f.IsTest && (!context.IsPullRequestMode || !string.IsNullOrWhiteSpace(f.DiffPatch)))
             .OrderByDescending(f => hotspotPaths.Contains(f.RelativePath))
             .ThenByDescending(f => f.LineCount)
