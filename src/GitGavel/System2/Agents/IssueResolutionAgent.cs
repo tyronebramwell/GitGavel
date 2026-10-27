@@ -68,7 +68,9 @@ public class IssueResolutionAgent
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
-        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
+        var summaries = context.AstSummaries != null && context.AstSummaries.Count > 0
+            ? context.AstSummaries
+            : AstAnalyzer.AnalyzeAll(context.SourceFiles ?? []);
         foreach (var sum in summaries)
         {
             var symbolList = sum.Symbols.Count > 0
@@ -79,11 +81,7 @@ public class IssueResolutionAgent
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Current Repository Files Snapshot:");
-        foreach (var src in context.SourceFiles.Concat(context.TestFiles))
-        {
-            promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
-            promptBuilder.AppendLine(src.Content.Length > 6000 ? src.Content[..6000] + "\n...(truncated)" : src.Content);
-        }
+        promptBuilder.AppendLine("(File contents omitted for context size limits. Rely on the AST Symbol Map and Git Commit History above to determine issue resolution.)");
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("Return a JSON array of resolved issues with the following schema:");
