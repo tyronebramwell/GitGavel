@@ -6,11 +6,13 @@ public enum SubagentProgressStatus
 {
     Started,
     Completed,
-    Failed
+    Failed,
+    Skipped
 }
 
 public record SubagentProgress(
     string AgentName,
     SubagentProgressStatus Status,
     SubagentResult? Result = null,
-    long ElapsedMs = 0);
+    long ElapsedMs = 0,
+    string? SkipReason = null);

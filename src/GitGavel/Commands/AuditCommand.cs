@@ -63,6 +63,10 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         [CommandOption("--allow-external-paths")]
         [Description("Explicitly allow configuration, SARIF, or reporting paths outside the repository root.")]
         public bool AllowExternalPaths { get; set; }
+
+        [CommandOption("--all-agents|--no-gate")]
+        [Description("Bypass Jev pre-execution subagent gating and execute all enabled subagents.")]
+        public bool AllAgents { get; set; }
     }
 
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
@@ -178,6 +182,16 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.WriteLine();
 
         // 2. System 2 Discovery Execution
+        if (settings.AllAgents)
+        {
+            config.Triage.SubagentGating.Enabled = false;
+        }
+
+        var jevApiKey = KeyResolver.Resolve(config.Triage.Jev.ApiKey, config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
+        ITriageEngine triageEngine = settings.UseMock || config.Triage.Engine == "llm-synthesizer"
+            ? new MockTriageEngine()
+            : new TypeSafeJevEngine(jevApiKey);
+
         var apiKey = KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
         var defaultTimeout = TimeSpan.FromSeconds(config.Subagents.TimeoutSeconds > 0 ? config.Subagents.TimeoutSeconds : 300);
 
@@ -185,7 +199,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             forceMock: settings.UseMock || settings.UseMockLlm,
             fallbackClient: new GeminiLlmClient(apiKey, timeout: defaultTimeout));
 
-        ISubagentOrchestrator orchestrator = _injectedOrchestrator ?? new SubagentOrchestrator(llmClientFactory);
+        ISubagentOrchestrator orchestrator = _injectedOrchestrator ?? new SubagentOrchestrator(llmClientFactory, triageEngine);
         OrchestrationResult orchestrationResult = null!;
 
         var enabledAgents = new List<string>();
@@ -209,6 +223,12 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
                 if (progress.Status == SubagentProgressStatus.Started)
                 {
                     pending.Add(progress.AgentName);
+                }
+                else if (progress.Status == SubagentProgressStatus.Skipped)
+                {
+                    pending.Remove(progress.AgentName);
+                    var reason = Markup.Escape(progress.SkipReason ?? "Skipped by gating rules");
+                    AnsiConsole.MarkupLine($"  [grey]⏭️[/] [bold]{progress.AgentName}[/] [grey]skipped:[/] [grey]{reason}[/]");
                 }
                 else if (progress.Status == SubagentProgressStatus.Completed)
                 {
@@ -260,7 +280,12 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             });
 
         AnsiConsole.WriteLine();
-        AnsiConsole.MarkupLine($"[green]✓[/] System 2 Discovery complete in [cyan]{orchestrationResult.TotalDurationMs / 1000.0:F1}s[/] (Total Tokens: [yellow]{orchestrationResult.TotalTokens:N0}[/], Findings: [bold]{orchestrationResult.AllFindings.Count}[/])\n");
+        AnsiConsole.MarkupLine($"[green]✓[/] System 2 Discovery complete in [cyan]{orchestrationResult.TotalDurationMs / 1000.0:F1}s[/] (Total Tokens: [yellow]{orchestrationResult.TotalTokens:N0}[/], Findings: [bold]{orchestrationResult.AllFindings.Count}[/])");
+        if (orchestrationResult.GatingResult?.HasSkippedAgents == true)
+        {
+            AnsiConsole.MarkupLine($"  [grey]⚡ Jev Subagent Gating saved ~{orchestrationResult.GatingResult.EstimatedTokensSaved:N0} estimated tokens ({orchestrationResult.GatingResult.SkippedAgentNames.Count} subagent(s) skipped)[/]");
+        }
+        AnsiConsole.WriteLine();
 
         // Display Findings Table
         if (orchestrationResult.AllFindings.Count == 0)
@@ -311,11 +336,6 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             });
 
         // 3. System 1 Jev Decision Engine (Triage Gatekeeper)
-        var jevApiKey = KeyResolver.Resolve(config.Triage.Jev.ApiKey, config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
-        ITriageEngine triageEngine = settings.UseMock || config.Triage.Engine == "llm-synthesizer"
-            ? new MockTriageEngine()
-            : new TypeSafeJevEngine(jevApiKey);
-
         List<TriageDecision> triageDecisions = null!;
         List<PrCommentTriageDecision> prCommentDecisions = [];
         PostedPrReviewResult? postedPrReview = null;

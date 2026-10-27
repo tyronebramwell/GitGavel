@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using GitGavel.Configuration;
 using GitGavel.Discovery;
+using GitGavel.System1.Abstractions;
 using GitGavel.System1.Models;
 using GitGavel.System2.Abstractions;
 using GitGavel.System2.Agents;
@@ -14,6 +15,7 @@ public record OrchestrationResult
     public List<FindingCandidate> AllFindings { get; init; } = [];
     public List<SubagentResult> SubagentResults { get; init; } = [];
     public IssueResolutionAgentResult? IssueResolution { get; init; }
+    public SubagentGatingResult? GatingResult { get; init; }
     public int TotalPromptTokens =>
         SubagentResults.Sum(s => s.PromptTokens) +
         (IssueResolution?.PromptTokens ?? 0);
@@ -27,31 +29,42 @@ public record OrchestrationResult
 public class SubagentOrchestrator : ISubagentOrchestrator
 {
     private readonly ILlmClientFactory _clientFactory;
+    private readonly ITriageEngine? _triageEngine;
 
     public SubagentOrchestrator()
-        : this(new LlmClientFactory())
+        : this(new LlmClientFactory(), triageEngine: null)
     {
     }
 
-    public SubagentOrchestrator(ILlmClient defaultClient)
-        : this(new LlmClientFactory(fallbackClient: defaultClient))
+    public SubagentOrchestrator(ILlmClient defaultClient, ITriageEngine? triageEngine = null)
+        : this(new LlmClientFactory(fallbackClient: defaultClient), triageEngine)
     {
     }
 
-    public SubagentOrchestrator(ILlmClientFactory clientFactory)
+    public SubagentOrchestrator(ILlmClientFactory clientFactory, ITriageEngine? triageEngine = null)
     {
         _clientFactory = clientFactory;
+        _triageEngine = triageEngine;
     }
 
     public Task<OrchestrationResult> RunAllAsync(RepoContext context, GitGavelConfig config, CancellationToken ct = default) =>
-        RunAllAsync(context, config, onProgress: null, ct);
+        RunAllAsync(context, config, onProgress: null, triageEngine: _triageEngine, ct);
+
+    public Task<OrchestrationResult> RunAllAsync(
+        RepoContext context,
+        GitGavelConfig config,
+        Action<SubagentProgress>? onProgress,
+        CancellationToken ct = default) =>
+        RunAllAsync(context, config, onProgress, triageEngine: _triageEngine, ct);
 
     public async Task<OrchestrationResult> RunAllAsync(
         RepoContext context,
         GitGavelConfig config,
         Action<SubagentProgress>? onProgress,
+        ITriageEngine? triageEngine,
         CancellationToken ct = default)
     {
+        triageEngine ??= _triageEngine;
         var agents = new List<ISubagent>();
 
         if (config.Subagents.SpecDrift?.Enabled == true)
@@ -82,6 +95,42 @@ public class SubagentOrchestrator : ISubagentOrchestrator
         {
             var client = _clientFactory.CreateClient(config.Subagents.Tests, config);
             agents.Add(new TestSentinelAgent(client, config.Subagents.Tests.Model, config.Subagents.Tests.Tiers));
+        }
+
+        SubagentGatingResult? gatingResult = null;
+        if (triageEngine != null && agents.Count > 0)
+        {
+            try
+            {
+                var candidateNames = agents.Select(a => a.Name).ToList();
+                gatingResult = await triageEngine.EvaluateSubagentGatingAsync(context, candidateNames, config, ct);
+
+                if (gatingResult?.HasSkippedAgents == true)
+                {
+                    var skippedSet = gatingResult.SkippedAgentNames.ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                    foreach (var decision in gatingResult.Decisions.Where(d => !d.ShouldRun))
+                    {
+                        try
+                        {
+                            onProgress?.Invoke(new SubagentProgress(
+                                decision.AgentName,
+                                SubagentProgressStatus.Skipped,
+                                SkipReason: decision.Reason));
+                        }
+                        catch
+                        {
+                            // Progress callback exceptions should never disrupt orchestration
+                        }
+                    }
+
+                    agents = agents.Where(a => !skippedSet.Contains(a.Name)).ToList();
+                }
+            }
+            catch
+            {
+                // Never fail orchestration if gating evaluation throws; proceed with configured agents
+            }
         }
 
         var sw = Stopwatch.StartNew();
@@ -148,7 +197,8 @@ public class SubagentOrchestrator : ISubagentOrchestrator
         {
             AllFindings = allFindings,
             SubagentResults = results.ToList(),
-            TotalDurationMs = sw.ElapsedMilliseconds
+            TotalDurationMs = sw.ElapsedMilliseconds,
+            GatingResult = gatingResult
         };
     }
 

@@ -1,4 +1,5 @@
 using GitGavel.Configuration;
+using GitGavel.Discovery;
 using GitGavel.System1.Abstractions;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
@@ -22,6 +23,176 @@ public class TypeSafeJevEngine : ITriageEngine
         {
             ApiKey = key
         });
+    }
+
+    public async Task<SubagentGatingResult> EvaluateSubagentGatingAsync(
+        RepoContext context,
+        IReadOnlyList<string> candidateAgentNames,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        var gatingConfig = config.Triage.SubagentGating;
+        var decisions = new List<SubagentGatingDecision>();
+
+        // 1. Check if gating is disabled or bypassed in full repo mode
+        if (!gatingConfig.Enabled || (gatingConfig.BypassInFullRepoMode && !context.IsPullRequestMode))
+        {
+            foreach (var name in candidateAgentNames)
+            {
+                decisions.Add(new SubagentGatingDecision(
+                    name,
+                    ShouldRun: true,
+                    Confidence: 1.0,
+                    Reason: !gatingConfig.Enabled ? "Subagent gating disabled in configuration." : "Subagent gating bypassed in full repository audit mode.",
+                    IsDeterministicOverride: true));
+            }
+            return new SubagentGatingResult(decisions, EstimatedTokensSaved: 0);
+        }
+
+        // 2. Identify deterministic override triggers
+        var hasSpecChanges = context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) ||
+                             context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch));
+        var hasSarif = context.SarifFindings.Count > 0;
+        var hasComplexity = context.AstSummaries.Any(a => a.TotalComplexityScore >= 15 || a.IsComplexityHotspot);
+
+        var pendingQuestions = new Dictionary<string, Question>();
+        var agentToQuestionKey = new Dictionary<string, string>();
+
+        foreach (var agentName in candidateAgentNames)
+        {
+            if (agentName == "SecurityAuditor" && gatingConfig.AlwaysRunSecurityOnSarifAlerts && hasSarif)
+            {
+                decisions.Add(new SubagentGatingDecision(
+                    agentName,
+                    ShouldRun: true,
+                    Confidence: 1.0,
+                    Reason: $"Deterministic override: {context.SarifFindings.Count} SARIF static alerts loaded.",
+                    IsDeterministicOverride: true));
+                continue;
+            }
+
+            if (agentName == "SpecDriftAgent" && gatingConfig.AlwaysRunSpecDriftOnSpecChanges && hasSpecChanges)
+            {
+                decisions.Add(new SubagentGatingDecision(
+                    agentName,
+                    ShouldRun: true,
+                    Confidence: 1.0,
+                    Reason: "Deterministic override: specification documents modified in diff.",
+                    IsDeterministicOverride: true));
+                continue;
+            }
+
+            if (agentName == "RefactoringAgent" && hasComplexity)
+            {
+                decisions.Add(new SubagentGatingDecision(
+                    agentName,
+                    ShouldRun: true,
+                    Confidence: 1.0,
+                    Reason: "Deterministic override: Roslyn cyclomatic complexity >= 15 detected.",
+                    IsDeterministicOverride: true));
+                continue;
+            }
+
+            // Otherwise, prepare Jev Noul question
+            switch (agentName)
+            {
+                case "SpecDriftAgent":
+                    pendingQuestions["run_spec_drift"] = Question.Noul(
+                        "Do the changes modify specifications, API documentation, OpenAPI schemas, or public interface contracts?",
+                        "Changes modify documentation, OpenAPI schemas, public controllers, or interface contracts.",
+                        "Changes are purely internal refactoring, tests, or bug fixes with no spec or documentation impact."
+                    );
+                    agentToQuestionKey[agentName] = "run_spec_drift";
+                    break;
+
+                case "SecurityAuditor":
+                    pendingQuestions["run_security"] = Question.Noul(
+                        "Do the changes touch security-critical code, authentication, authorization, cryptography, data access, network boundaries, or third-party dependencies?",
+                        "Changes touch authentication, secrets, crypto, database queries, network endpoints, or dependencies.",
+                        "Changes are cosmetic, UI, documentation, or trivial formatting."
+                    );
+                    agentToQuestionKey[agentName] = "run_security";
+                    break;
+
+                case "ReliabilityAgent":
+                    pendingQuestions["run_reliability"] = Question.Noul(
+                        "Do the changes modify or introduce asynchronous execution, concurrency, task scheduling, exception handling, resource disposal, or performance-critical loops?",
+                        "Changes affect async/await, concurrency, error handling, disposable resources, or collections in loops.",
+                        "Changes do not modify execution semantics, error handling, or performance-sensitive logic."
+                    );
+                    agentToQuestionKey[agentName] = "run_reliability";
+                    break;
+
+                case "RefactoringAgent":
+                    pendingQuestions["run_refactoring"] = Question.Noul(
+                        "Do the modified files exhibit significant structural complexity churn, high cyclomatic complexity, or large method modifications?",
+                        "Changes introduce large methods, structural churn, deep nesting, or architectural complexity.",
+                        "Changes are small, localized, or low-churn adjustments."
+                    );
+                    agentToQuestionKey[agentName] = "run_refactoring";
+                    break;
+
+                case "TestSentinelAgent":
+                    pendingQuestions["run_tests"] = Question.Noul(
+                        "Were new production features or branching logic introduced that require automated unit, integration, or E2E test verification?",
+                        "New business logic, classes, methods, or conditional branches were added without corresponding tests.",
+                        "Only documentation, build files, or existing tests were modified, or change is a trivial cosmetic fix."
+                    );
+                    agentToQuestionKey[agentName] = "run_tests";
+                    break;
+
+                default:
+                    decisions.Add(new SubagentGatingDecision(
+                        agentName,
+                        ShouldRun: true,
+                        Confidence: 0.80,
+                        Reason: "Standard subagent dispatch."));
+                    break;
+            }
+        }
+
+        // 3. Dispatch Jev SystemOne query if any agents need probabilistic gating
+        if (pendingQuestions.Count > 0)
+        {
+            var changedFilesList = context.ActivePullRequest?.ChangedFiles?.Select(f => (object)new { f.FilePath, f.Additions, f.Deletions }).ToList() ??
+                                   context.SourceFiles.Where(f => !string.IsNullOrEmpty(f.DiffPatch)).Select(f => (object)new { FilePath = f.RelativePath, Additions = f.LineCount, Deletions = 0 }).ToList();
+
+            var metadataState = JsonContent.From(new
+            {
+                context = new
+                {
+                    isPullRequestMode = context.IsPullRequestMode,
+                    prTitle = context.ActivePullRequest?.Title,
+                    prDescription = context.ActivePullRequest?.Body != null && context.ActivePullRequest.Body.Length > 500
+                        ? context.ActivePullRequest.Body[..500]
+                        : context.ActivePullRequest?.Body,
+                    changedFiles = changedFilesList,
+                    specFilesCount = context.SpecFiles.Count,
+                    sourceFilesCount = context.SourceFiles.Count,
+                    testFilesCount = context.TestFiles.Count,
+                    sarifFindingsCount = context.SarifFindings.Count,
+                    maxCyclomaticComplexity = context.AstSummaries.Count > 0 ? context.AstSummaries.Max(a => a.TotalComplexityScore) : 0
+                }
+            });
+
+            var response = await _jevClient.SystemOneAsync(metadataState, pendingQuestions, cancellationToken: ct);
+
+            foreach (var (agentName, qKey) in agentToQuestionKey)
+            {
+                var noul = response.Noul(qKey);
+                var prob = noul?.Noul ?? 0.50;
+                var shouldRun = prob >= gatingConfig.MinConfidence;
+                var reason = shouldRun
+                    ? $"Activated by Jev Noul (P={prob:P0} >= {gatingConfig.MinConfidence:P0})"
+                    : $"Skipped by Jev Noul (P={prob:P0} < {gatingConfig.MinConfidence:P0})";
+
+                decisions.Add(new SubagentGatingDecision(agentName, shouldRun, prob, reason));
+            }
+        }
+
+        var skipped = decisions.Count(d => !d.ShouldRun);
+        var tokensSaved = skipped * 5000L;
+        return new SubagentGatingResult(decisions, tokensSaved);
     }
 
     public async Task<TriageDecision> EvaluateFindingAsync(

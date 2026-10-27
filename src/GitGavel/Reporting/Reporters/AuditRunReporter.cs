@@ -46,8 +46,32 @@ public class AuditRunReporter : BaseMarkdownReporter
         sb.AppendLine($"| **SARIF Reports Ingested** | {ctx.RepoContext.SarifFindings.Count} findings |");
         sb.AppendLine();
 
-        // 3. System 2 Agent Diagnostics
-        sb.AppendLine("## 3. System 2 Generative Subagent Diagnostics");
+        // 3. Jev Subagent Pre-Execution Gating
+        if (ctx.Orchestration.GatingResult != null)
+        {
+            sb.AppendLine("## 3. Jev Subagent Pre-Execution Gating");
+            sb.AppendLine();
+            sb.AppendLine("| Subagent Name | Gating Status | Jev Confidence | Decision Reason | Override |");
+            sb.AppendLine("| :--- | :---: | :---: | :--- | :---: |");
+
+            foreach (var decision in ctx.Orchestration.GatingResult.Decisions)
+            {
+                var statusIcon = decision.ShouldRun ? "✅ Active" : "⏭️ Skipped";
+                var overrideText = decision.IsDeterministicOverride ? "Yes" : "No";
+                sb.AppendLine($"| **{decision.AgentName}** | {statusIcon} | {decision.Confidence:P0} | {decision.Reason} | {overrideText} |");
+            }
+
+            if (ctx.Orchestration.GatingResult.HasSkippedAgents)
+            {
+                sb.AppendLine();
+                sb.AppendLine("> [!NOTE]");
+                sb.AppendLine($"> **Token Efficiency**: {ctx.Orchestration.GatingResult.SkippedAgentNames.Count} subagent(s) were safely skipped by Jev pre-execution triage, saving an estimated **~{ctx.Orchestration.GatingResult.EstimatedTokensSaved:N0} LLM tokens**.");
+            }
+            sb.AppendLine();
+        }
+
+        // 4. System 2 Agent Diagnostics
+        sb.AppendLine("## 4. System 2 Generative Subagent Diagnostics");
         sb.AppendLine();
         sb.AppendLine("| Agent Name | Findings | Prompt Tokens | Completion Tokens | Total Tokens | Latency |");
         sb.AppendLine("| :--- | :--- | :--- | :--- | :--- | :--- |");
@@ -68,7 +92,7 @@ public class AuditRunReporter : BaseMarkdownReporter
         sb.AppendLine($"| **TOTAL** | **{ctx.Orchestration.AllFindings.Count} findings** | **{ctx.Orchestration.TotalPromptTokens:N0}** | **{ctx.Orchestration.TotalCompletionTokens:N0}** | **{ctx.Orchestration.TotalTokens:N0}** | **{ctx.Orchestration.TotalDurationMs}ms** |");
         sb.AppendLine();
 
-        // 4. System 1 Jev Triage Statistics
+        // 5. System 1 Jev Triage Statistics
         var accepted = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.AcceptedToBacklog);
         var humanReview = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.RoutedToHumanReview);
         var duplicates = ctx.TriageDecisions.Count(d => d.Status == TriageStatus.SuppressedDuplicate);
@@ -76,7 +100,7 @@ public class AuditRunReporter : BaseMarkdownReporter
         var closedCount = ctx.IssueResolutionDecisions.Count(d => d.Action == IssueResolutionAction.CloseResolved);
         var prInlineCount = ctx.PrCommentDecisions.Count(d => d.Action == PrCommentAction.PostInlineReview);
 
-        sb.AppendLine("## 4. System 1 Jev Triage Funnel Statistics");
+        sb.AppendLine("## 5. System 1 Jev Triage Funnel Statistics");
         sb.AppendLine();
         sb.AppendLine("| Triage Outcome | Count | Description |");
         sb.AppendLine("| :--- | :--- | :--- |");

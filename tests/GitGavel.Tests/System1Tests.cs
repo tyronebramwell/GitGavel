@@ -1,5 +1,6 @@
 using FluentAssertions;
 using GitGavel.Configuration;
+using GitGavel.Discovery;
 using GitGavel.System1.Engines;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
@@ -597,5 +598,241 @@ public class System1Tests
         decisions.Single(d => d.Finding.Title == "Low severity style nitpick").Action.Should().Be(PrCommentAction.Discard);
         decisions.Count(d => d.Action == PrCommentAction.PostInlineReview).Should().Be(1);
         decisions.Count(d => d.Action == PrCommentAction.SummaryCommentOnly).Should().Be(1);
+    }
+
+    [Fact]
+    public async Task MockTriageEngine_SubagentGating_WhenBypassConfigured_EnablesAllAgentsWithDeterministicOverride()
+    {
+        var engine = new MockTriageEngine();
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 50, 1000, "class App {}", false)],
+            SarifFindings = []
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig
+                {
+                    Enabled = true,
+                    BypassInFullRepoMode = true
+                }
+            }
+        };
+
+        var candidateAgents = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidateAgents, config);
+
+        result.Should().NotBeNull();
+        result.Decisions.Should().HaveCount(5);
+        result.ActiveAgentNames.Should().BeEquivalentTo(candidateAgents);
+        result.SkippedAgentNames.Should().BeEmpty();
+        result.Decisions.Should().OnlyContain(d => d.ShouldRun && d.IsDeterministicOverride);
+        result.EstimatedTokensSaved.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task MockTriageEngine_SubagentGating_WhenMarkdownOnlyDiff_ActivatesSpecDriftAndSkipsCodeAgents()
+    {
+        var engine = new MockTriageEngine();
+        var prContext = new PullRequestContext
+        {
+            PrNumber = 42,
+            Title = "docs: update spec documentation",
+            Body = "Update specs",
+            BaseRef = "main",
+            HeadRef = "docs/spec-update",
+            HeadSha = "abc1234",
+            ChangedFiles = [new PullRequestChangedFile("specs/api.md", "modified", 10, 2, "@@ -1,3 +1,5 @@")]
+        };
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [new ScannedFile("specs/api.md", "/mock/specs/api.md", 20, 200, "# API", true, DiffPatch: "@@ -1,3 +1,5 @@")],
+            SourceFiles = [],
+            SarifFindings = [],
+            ActivePullRequest = prContext
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig
+                {
+                    Enabled = true,
+                    BypassInFullRepoMode = true,
+                    AlwaysRunSpecDriftOnSpecChanges = true
+                }
+            }
+        };
+
+        var candidateAgents = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidateAgents, config);
+
+        result.Should().NotBeNull();
+        result.ActiveAgentNames.Should().ContainSingle().Which.Should().Be("SpecDriftAgent");
+        result.SkippedAgentNames.Should().BeEquivalentTo(["SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent"]);
+        result.EstimatedTokensSaved.Should().Be(4 * 5000L);
+    }
+
+    [Fact]
+    public async Task MockTriageEngine_SubagentGating_WhenSarifAlertsPresent_ForcesSecurityAuditor()
+    {
+        var engine = new MockTriageEngine();
+        var prContext = new PullRequestContext { PrNumber = 42, Title = "fix: typo" };
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = [new SarifFinding("SEC001", "SQL injection", "High", "src/Db.cs", 10, 20)],
+            ActivePullRequest = prContext
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig
+                {
+                    Enabled = true,
+                    AlwaysRunSecurityOnSarifAlerts = true
+                }
+            }
+        };
+
+        var result = await engine.EvaluateSubagentGatingAsync(context, ["SecurityAuditor", "SpecDriftAgent"], config);
+
+        var secDecision = result.Decisions.Single(d => d.AgentName == "SecurityAuditor");
+        secDecision.ShouldRun.Should().BeTrue();
+        secDecision.IsDeterministicOverride.Should().BeTrue();
+        secDecision.Confidence.Should().Be(1.0);
+        secDecision.Reason.Should().Contain("SARIF static alerts loaded");
+    }
+
+    [Fact]
+    public async Task MockTriageEngine_SubagentGating_WhenAstComplexityHigh_ForcesRefactoringAgent()
+    {
+        var engine = new MockTriageEngine();
+        var prContext = new PullRequestContext { PrNumber = 42, Title = "perf: optimize loop" };
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/Heavy.cs", "/mock/src/Heavy.cs", 200, 3000, "class Heavy {}", false, DiffPatch: "@@ -1 +1 @@")],
+            AstSummaries = [new FileAstSummary("src/Heavy.cs", [], 25, true)],
+            SarifFindings = [],
+            ActivePullRequest = prContext
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig { Enabled = true }
+            }
+        };
+
+        var result = await engine.EvaluateSubagentGatingAsync(context, ["RefactoringAgent"], config);
+
+        var refactorDecision = result.Decisions.Single(d => d.AgentName == "RefactoringAgent");
+        refactorDecision.ShouldRun.Should().BeTrue();
+        refactorDecision.IsDeterministicOverride.Should().BeTrue();
+        refactorDecision.Reason.Should().Contain("cyclomatic complexity");
+    }
+
+    [Fact]
+    public async Task TypeSafeJevEngine_SubagentGating_WhenSystemOneNoulEvaluated_RespectsThresholdsAndCalculatesTokenSavings()
+    {
+        var mockJev = new Mock<IJevClient>();
+
+        var gatingResponse = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["run_spec_drift"] = new NoulAnswer { Noul = 0.20 },
+                ["run_security"] = new NoulAnswer { Noul = 0.15 },
+                ["run_reliability"] = new NoulAnswer { Noul = 0.85 },
+                ["run_refactoring"] = new NoulAnswer { Noul = 0.30 },
+                ["run_tests"] = new NoulAnswer { Noul = 0.90 }
+            }
+        };
+
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.IsAny<IReadOnlyDictionary<string, Question>>(),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(gatingResponse);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+        var prContext = new PullRequestContext { PrNumber = 10, Title = "feat: concurrency fix" };
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/Worker.cs", "/mock/src/Worker.cs", 50, 500, "class Worker {}", false, DiffPatch: "@@ -1 +1 @@")],
+            SarifFindings = [],
+            ActivePullRequest = prContext
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig
+                {
+                    Enabled = true,
+                    MinConfidence = 0.50,
+                    AlwaysRunSecurityOnSarifAlerts = true,
+                    AlwaysRunSpecDriftOnSpecChanges = true
+                }
+            }
+        };
+
+        var candidateAgents = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidateAgents, config);
+
+        result.Should().NotBeNull();
+        result.ActiveAgentNames.Should().BeEquivalentTo(["ReliabilityAgent", "TestSentinelAgent"]);
+        result.SkippedAgentNames.Should().BeEquivalentTo(["SpecDriftAgent", "SecurityAuditor", "RefactoringAgent"]);
+        result.EstimatedTokensSaved.Should().Be(3 * 5000L);
+    }
+
+    [Fact]
+    public async Task TypeSafeJevEngine_SubagentGating_WhenDisabledInConfig_ActivatesAllAgents()
+    {
+        var mockJev = new Mock<IJevClient>();
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = []
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig { Enabled = false }
+            }
+        };
+
+        var candidates = new[] { "SpecDriftAgent", "SecurityAuditor" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidates, config);
+
+        result.ActiveAgentNames.Should().BeEquivalentTo(candidates);
+        result.SkippedAgentNames.Should().BeEmpty();
+        result.EstimatedTokensSaved.Should().Be(0);
+        mockJev.Verify(c => c.SystemOneAsync(It.IsAny<JsonContent>(), It.IsAny<IReadOnlyDictionary<string, Question>>(), It.IsAny<JevRequestOptions>(), It.IsAny<CancellationToken>()), Times.Never);
     }
 }

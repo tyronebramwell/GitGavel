@@ -68,6 +68,12 @@ subagents:
     includeCommitLinks: true
 triage:
   engine: jev
+  subagentGating:
+    enabled: true
+    minConfidence: 0.5
+    alwaysRunSecurityOnSarifAlerts: true
+    alwaysRunSpecDriftOnSpecChanges: true
+    bypassInFullRepoMode: true
   jev:
     apiKeyEnv: JEV_API_KEY
     thresholds:
