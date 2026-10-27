@@ -283,7 +283,7 @@ public static partial class IssueFormatter
 
         int CountDomain(string cat, bool inlineOnly) =>
             (inlineOnly ? decisions.Where(d => d.Action == PrCommentAction.PostInlineReview) : activeDecisions)
-            .Count(d => d.Finding.Category.Equals(cat, StringComparison.OrdinalIgnoreCase));
+            .Count(d => string.Equals(d.Finding.Category, cat, StringComparison.OrdinalIgnoreCase));
 
         sb.AppendLine("## ⚖️ GitGavel Pull Request Audit Summary");
         sb.AppendLine();
@@ -291,6 +291,7 @@ public static partial class IssueFormatter
         sb.AppendLine("| :--- | :---: | :---: | :---: |");
         sb.AppendLine($"| 🛡️ Security | {CountDomain("Security", false)} | {CountDomain("Security", true)} | {(duplicatesSuppressed > 0 ? $"{duplicatesSuppressed} suppressed" : "—")} |");
         sb.AppendLine($"| 📋 Spec Alignment | {CountDomain("SpecDrift", false)} | {CountDomain("SpecDrift", true)} | — |");
+        sb.AppendLine($"| 🐛 Reliability | {CountDomain("Reliability", false)} | {CountDomain("Reliability", true)} | — |");
         sb.AppendLine($"| ⚙️ Architecture | {CountDomain("Refactoring", false)} | {CountDomain("Refactoring", true)} | — |");
         sb.AppendLine($"| 🧪 Test Coverage | {CountDomain("Testing", false)} | {CountDomain("Testing", true)} | — |");
         sb.AppendLine();

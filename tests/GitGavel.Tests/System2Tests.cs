@@ -143,16 +143,396 @@ public class System2Tests
     }
 
     [Fact]
+    public void FindingParser_ForReliabilityCategory_ProvidesIntelligentDefaultReferences()
+    {
+        var raw = """
+        [
+          {
+            "title": "Unbounded Memory Cache Growth in Hot Path",
+            "summary": "ConcurrentDictionary grows without eviction policy causing OutOfMemoryException.",
+            "category": "Reliability",
+            "severity": "High",
+            "filePath": "src/Cache/MemoryCacheService.cs",
+            "startLine": 45,
+            "endLine": 60,
+            "defectType": "ResourceLeak",
+            "suggestedRemediation": "Use IMemoryCache with size limits and eviction policies."
+          }
+        ]
+        """;
+
+        var findings = FindingParser.ParseFindings(raw, "ReliabilityAgent", "Reliability");
+
+        findings.Should().HaveCount(1);
+        var f = findings[0];
+        f.Category.Should().Be("Reliability");
+        f.DefectType.Should().Be("ResourceLeak");
+        f.References.Should().NotBeEmpty();
+        f.References.Should().Contain(r => r.Contains("Reliability and Exception Handling"));
+        f.References.Should().Contain(r => r.Contains("performance"));
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_ExecuteAsync_ProducesReliabilityFindings()
+    {
+        var capturedPrompt = "";
+        string? capturedModel = null;
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            capturedModel = req.Model;
+            return new LlmResponse
+            {
+                Content = """
+                [
+                  {
+                    "title": "Unobserved Task Exception and Race Condition",
+                    "summary": "Background task is not awaited and accesses mutable shared dictionary.",
+                    "category": "Reliability",
+                    "severity": "Critical",
+                    "defectType": "Concurrency",
+                    "filePath": "src/Worker.cs",
+                    "startLine": 20,
+                    "endLine": 35,
+                    "details": "Race condition on dictionary mutation without synchronization.",
+                    "suggestedRemediation": "await Task.WhenAll(tasks); and use ConcurrentDictionary.",
+                    "references": [
+                      "[Microsoft Learn: Async/Await Best Practices](https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming)"
+                    ]
+                  }
+                ]
+                """,
+                PromptTokens = 80,
+                CompletionTokens = 45,
+                DurationMs = 25,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles =
+            [
+                new ScannedFile("src/Worker.cs", "/mock/src/Worker.cs", 50, 1000, "public class Worker { public void Run() { Task.Run(() => {}); } }", false),
+                new ScannedFile("tests/WorkerTests.cs", "/mock/tests/WorkerTests.cs", 30, 600, "public class WorkerTests {}", false, true)
+            ],
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.IsSuccess.Should().BeTrue();
+        result.AgentName.Should().Be("ReliabilityAgent");
+        result.Findings.Should().HaveCount(1);
+        var finding = result.Findings[0];
+        finding.Category.Should().Be("Reliability");
+        finding.Severity.Should().Be("Critical");
+        finding.DefectType.Should().Be("Concurrency");
+        finding.FilePath.Should().Be("src/Worker.cs");
+        finding.SuggestedRemediation.Should().Contain("ConcurrentDictionary");
+
+        capturedPrompt.Should().Contain("Reliability & Performance Agent");
+        capturedPrompt.Should().Contain("Provable Logic Defects & Bugs");
+        capturedPrompt.Should().Contain("src/Worker.cs");
+        capturedPrompt.Should().NotContain("tests/WorkerTests.cs");
+        capturedModel.Should().Be("gemini-3.1-pro-preview");
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_InPullRequestMode_IncludesPrDiffGuidance()
+    {
+        var capturedPrompt = "";
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 60,
+                CompletionTokens = 10,
+                DurationMs = 15,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles =
+            [
+                new ScannedFile("src/OrderProcessor.cs", "/mock/src/OrderProcessor.cs", 80, 1500, "public class OrderProcessor {}", false, false, "@@ -10,3 +10,12 @@\n+ var x = list[index];")
+            ],
+            TestFiles = [],
+            SarifFindings = [],
+            ActivePullRequest = new PullRequestContext
+            {
+                PrNumber = 99,
+                Title = "Optimize batch processor",
+                HeadSha = "abcdef123456",
+                ChangedFiles = [new PullRequestChangedFile("src/OrderProcessor.cs", "modified", 10, 0, "patch")]
+            }
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.IsSuccess.Should().BeTrue();
+        capturedPrompt.Should().Contain("PULL REQUEST REVIEW MODE (PR #99: Optimize batch processor)");
+        capturedPrompt.Should().Contain("ANTI-SCOPE-CREEP RULE");
+        capturedPrompt.Should().Contain("PR Diff Patch:");
+        capturedPrompt.Should().Contain("+ var x = list[index];");
+        capturedPrompt.Should().NotContain("public class OrderProcessor {}");
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_ExecuteAsync_WhenLlmThrowsHttpRequestException_ReturnsFailureResult()
+    {
+        var mockClient = new MockLlmClient(_ => throw new HttpRequestException("Gemini API call failed with status code 503 (ServiceUnavailable)"));
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 20, 400, "public class App {}", false)],
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeFalse();
+        result.AgentName.Should().Be("ReliabilityAgent");
+        result.ErrorMessage.Should().Contain("Gemini API call failed with status code 503");
+        result.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_ExecuteAsync_WhenLlmThrowsTimeoutException_ReturnsFailureResult()
+    {
+        var mockClient = new MockLlmClient(_ => throw new TimeoutException("The LLM request timed out after 300 seconds."));
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/Service.cs", "/mock/src/Service.cs", 30, 600, "public class Service {}", false)],
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeFalse();
+        result.AgentName.Should().Be("ReliabilityAgent");
+        result.ErrorMessage.Should().Contain("timed out after 300 seconds");
+        result.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_ExecuteAsync_WithNullAstSummariesOrNullSourceFiles_DoesNotThrow()
+    {
+        var mockClient = new MockLlmClient(req => new LlmResponse
+        {
+            Content = "[]",
+            PromptTokens = 10,
+            CompletionTokens = 5,
+            DurationMs = 5,
+            ModelUsed = req.Model
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = null!,
+            TestFiles = [],
+            SarifFindings = [],
+            AstSummaries = null!
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeTrue();
+        result.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task SubagentOrchestrator_RunAllAsync_WhenSubagentConfigIsNull_DoesNotThrow()
+    {
+        var mockClient = new MockLlmClient(req => new LlmResponse
+        {
+            Content = "[]",
+            PromptTokens = 10,
+            CompletionTokens = 5,
+            DurationMs = 5,
+            ModelUsed = req.Model
+        });
+
+        var orchestrator = new SubagentOrchestrator(mockClient);
+        var config = new GitGavelConfig();
+        config.Subagents.Reliability = null!;
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 10, 100, "public class App {}", false)],
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await orchestrator.RunAllAsync(context, config);
+
+        result.Should().NotBeNull();
+        result.SubagentResults.Should().HaveCount(4); // 4 remaining enabled subagents
+    }
+
+    [Fact]
+    public void FindingParser_DecoupledDefectTypeAndTestDefectType_NoCrossPollution()
+    {
+        // 1. Only defectType provided
+        var rawReliability = """
+        [
+          {
+            "title": "State Overwrite Bug",
+            "summary": "Loop overwrites shared variable",
+            "category": "Reliability",
+            "severity": "High",
+            "filePath": "src/Loop.cs",
+            "defectType": "LogicDefect"
+          }
+        ]
+        """;
+        var findings1 = FindingParser.ParseFindings(rawReliability, "ReliabilityAgent", "Reliability");
+        findings1.Should().HaveCount(1);
+        findings1[0].DefectType.Should().Be("LogicDefect");
+        findings1[0].TestDefectType.Should().BeNull();
+
+        // 2. Only testDefectType provided
+        var rawTesting = """
+        [
+          {
+            "title": "Missing Unit Test",
+            "summary": "Core service lacks branch coverage",
+            "category": "Testing",
+            "severity": "Medium",
+            "filePath": "tests/ServiceTests.cs",
+            "testTier": "Unit",
+            "testDefectType": "MissingTest"
+          }
+        ]
+        """;
+        var findings2 = FindingParser.ParseFindings(rawTesting, "TestSentinelAgent", "Testing");
+        findings2.Should().HaveCount(1);
+        findings2[0].TestDefectType.Should().Be("MissingTest");
+        findings2[0].DefectType.Should().BeNull();
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_InPullRequestMode_OnlyAuditsFilesWithDiffPatches()
+    {
+        var capturedPrompt = "";
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 50,
+                CompletionTokens = 10,
+                DurationMs = 10,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles =
+            [
+                new ScannedFile("src/ChangedFile.cs", "/mock/src/ChangedFile.cs", 40, 800, "public class ChangedFile {}", false, false, "@@ -1,3 +1,5 @@\n+ var x = 1;"),
+                new ScannedFile("src/UnchangedFile.cs", "/mock/src/UnchangedFile.cs", 100, 2000, "public class UnchangedFile {}", false, false, null)
+            ],
+            TestFiles = [],
+            SarifFindings = [],
+            ActivePullRequest = new PullRequestContext
+            {
+                PrNumber = 76,
+                Title = "Test PR filtering",
+                HeadSha = "123456",
+                ChangedFiles = [new PullRequestChangedFile("src/ChangedFile.cs", "modified", 2, 0, "patch")]
+            }
+        };
+
+        var result = await agent.ExecuteAsync(context);
+        result.IsSuccess.Should().BeTrue();
+        capturedPrompt.Should().Contain("src/ChangedFile.cs");
+        capturedPrompt.Should().NotContain("src/UnchangedFile.cs");
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_CapsPromptAtTwentySourceFiles()
+    {
+        var capturedPrompt = "";
+        var mockClient = new MockLlmClient(req =>
+        {
+            capturedPrompt = req.Prompt;
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 50,
+                CompletionTokens = 10,
+                DurationMs = 10,
+                ModelUsed = req.Model
+            };
+        });
+
+        var agent = new ReliabilityAgent(mockClient);
+        var sourceFiles = Enumerable.Range(1, 25)
+            .Select(i => new ScannedFile($"src/File{i:D2}.cs", $"/mock/src/File{i:D2}.cs", 10 + i, 100 * i, $"public class File{i:D2} {{}}", false))
+            .ToList();
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = sourceFiles,
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.ExecuteAsync(context);
+        result.IsSuccess.Should().BeTrue();
+        capturedPrompt.Should().Contain("src/File25.cs");
+        capturedPrompt.Should().Contain("src/File06.cs");
+        capturedPrompt.Should().NotContain("src/File05.cs");
+        capturedPrompt.Should().NotContain("src/File01.cs");
+    }
+
+    [Fact]
     public async Task SubagentOrchestrator_RunsAllEnabledSubagentsConcurrently()
     {
         var mockClient = new MockLlmClient(req =>
         {
             var agentName = req.Prompt.Contains("Security") ? "SecurityAuditor" :
                             req.Prompt.Contains("Spec") ? "SpecDriftAgent" :
+                            req.Prompt.Contains("Reliability") ? "ReliabilityAgent" :
                             req.Prompt.Contains("Test Sentinel") ? "TestSentinelAgent" : "RefactoringAgent";
 
             var category = req.Prompt.Contains("Security") ? "Security" :
                            req.Prompt.Contains("Spec") ? "SpecDrift" :
+                           req.Prompt.Contains("Reliability") ? "Reliability" :
                            req.Prompt.Contains("Test Sentinel") ? "Testing" : "Refactoring";
 
             var json = $$"""
@@ -196,14 +576,14 @@ public class System2Tests
         var result = await orchestrator.RunAllAsync(context, config);
 
         result.Should().NotBeNull();
-        result.SubagentResults.Should().HaveCount(4);
-        result.AllFindings.Should().HaveCount(4);
-        result.TotalPromptTokens.Should().Be(200);
-        result.TotalCompletionTokens.Should().Be(120);
+        result.SubagentResults.Should().HaveCount(5);
+        result.AllFindings.Should().HaveCount(5);
+        result.TotalPromptTokens.Should().Be(250);
+        result.TotalCompletionTokens.Should().Be(150);
     }
 
     [Fact]
-    public async Task SubagentOrchestrator_InPullRequestMode_RunsSameFourSubagentsOnDiffScopedFiles()
+    public async Task SubagentOrchestrator_InPullRequestMode_RunsSameFiveSubagentsOnDiffScopedFiles()
     {
         var capturedPrompts = new List<string>();
         var mockClient = new MockLlmClient(req =>
@@ -265,9 +645,9 @@ public class System2Tests
         var scopedContext = fullRepoContext.ScopeToPullRequest(prContext);
         var result = await orchestrator.RunAllAsync(scopedContext, new GitGavelConfig());
 
-        result.SubagentResults.Should().HaveCount(4);
-        result.AllFindings.Should().HaveCount(4);
-        capturedPrompts.Should().HaveCount(4);
+        result.SubagentResults.Should().HaveCount(5);
+        result.AllFindings.Should().HaveCount(5);
+        capturedPrompts.Should().HaveCount(5);
         capturedPrompts.Should().AllSatisfy(p =>
         {
             p.Should().Contain("PULL REQUEST REVIEW MODE (PR #42");
@@ -411,6 +791,48 @@ public class System2Tests
     }
 
     [Fact]
+    public async Task GeminiLlmClient_StripsModelsPrefix_WhenBuildingUrl()
+    {
+        string? requestedUrl = null;
+        var handler = new SimpleTestHttpMessageHandler(req =>
+        {
+            requestedUrl = req.RequestUri?.ToString();
+            var json = """
+            {
+              "candidates": [
+                {
+                  "content": {
+                    "parts": [{ "text": "{\"findings\": []}" }]
+                  }
+                }
+              ]
+            }
+            """;
+            return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        var client = new GeminiLlmClient(apiKey: "test-key", httpClient: new HttpClient(handler));
+        var response = await client.GenerateAsync(new LlmRequest
+        {
+            Prompt = "Hello",
+            Model = "models/gemini-3.1-pro-preview"
+        });
+
+        response.Content.Should().Be("{\"findings\": []}");
+        requestedUrl.Should().Contain("/models/gemini-3.1-pro-preview:generateContent");
+        requestedUrl.Should().NotContain("/models/models/");
+    }
+
+    private class SimpleTestHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(handler(request));
+    }
+
+    [Fact]
     public async Task System2Agents_IncludeFullSpecAndAllSourceFilesWithoutTruncation()
     {
         var capturedPrompts = new List<string>();
@@ -448,13 +870,16 @@ public class System2Tests
         ISubagentOrchestrator orchestrator = new SubagentOrchestrator(mockClient);
         await orchestrator.RunAllAsync(repoContext, new GitGavelConfig());
 
-        capturedPrompts.Should().HaveCount(4);
+        capturedPrompts.Should().HaveCount(5);
         var specPrompt = capturedPrompts.Single(p => p.Contains("Spec Drift Agent"));
         specPrompt.Should().Contain("## Section 10: Final Spec Requirement");
         specPrompt.Should().Contain("src/File20.cs");
 
         var securityPrompt = capturedPrompts.Single(p => p.Contains("Security Auditor Agent"));
         securityPrompt.Should().Contain("src/File20.cs");
+
+        var reliabilityPrompt = capturedPrompts.Single(p => p.Contains("Reliability & Performance Agent"));
+        reliabilityPrompt.Should().Contain("src/File20.cs");
 
         var testPrompt = capturedPrompts.Single(p => p.Contains("Test Sentinel Agent"));
         testPrompt.Should().Contain("src/File20.cs");
@@ -529,6 +954,7 @@ public class System2Tests
         var config = new GitGavelConfig();
         config.Subagents.SpecDrift.Provider = "mock";
         config.Subagents.Security.Provider = "mock";
+        config.Subagents.Reliability.Provider = "mock";
         config.Subagents.Refactoring.Provider = "mock";
         config.Subagents.Tests.Provider = "mock";
 
@@ -541,7 +967,7 @@ public class System2Tests
         };
 
         var result = await orchestrator.RunAllAsync(repoContext, config);
-        result.SubagentResults.Should().HaveCount(4);
+        result.SubagentResults.Should().HaveCount(5);
         result.AllFindings.Should().NotBeEmpty();
     }
 
@@ -621,7 +1047,7 @@ public class System2Tests
         var orchestrator = new SubagentOrchestrator(mockClient);
         await orchestrator.RunAllAsync(repoContext, new GitGavelConfig());
 
-        capturedPrompts.Should().HaveCount(4);
+        capturedPrompts.Should().HaveCount(5);
         foreach (var prompt in capturedPrompts)
         {
             if (exceedLimitByOne)

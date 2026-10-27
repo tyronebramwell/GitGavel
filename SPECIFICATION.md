@@ -92,7 +92,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.1 📋 Spec Drift Agent
 * **Role**: Detects divergence between written requirements and code implementation.
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Inputs**:
   * *Full Repo Mode*: Spec files (`specs/*.md`, `docs/**/*.md`), OpenAPI schemas, public controllers/interfaces, and DTOs.
   * *PR Review Mode*: Spec files + only the source files and diff hunks modified in the PR.
@@ -100,7 +100,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.2 🛡️ Security Auditor Agent
 * **Role**: Identifies security vulnerabilities, credential leaks, and authorization flaws.
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Inputs**:
   * *Full Repo Mode*: Auth handlers, database queries, API clients, app configuration, and static security scan reports (SARIF).
   * *PR Review Mode*: Only the changed files and unified diff patches in the PR (+ any SARIF alerts on those changed lines).
@@ -116,7 +116,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.4 🐛 Reliability & Performance Agent (`ReliabilityAgent`)
 * **Role**: Audits production code for functional bugs, performance issues, performance improvements, provable logic defects, runtime crash paths, concurrency defects, and resource leaks.
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Core Responsibilities**:
   * **Provable Logic Defects & Bugs**: Detects off-by-one errors, inverted conditions, state overwrite bugs inside loops, broken pagination, silent data truncation, and incorrect edge-case handling.
   * **Crash Paths & Exception Safety**: Flags unhandled exceptions, null/empty dereference risks, unsafe type casts, division-by-zero or index-out-of-range paths, and missing validation at external API or I/O boundaries.
@@ -130,7 +130,7 @@ All five core domain subagents (`SpecDriftAgent`, `SecurityAuditorAgent`, `Relia
 
 ### 4.5 🧪 Test Sentinel Agent
 * **Role**: Audits automated testing across the entire test pyramid (**Unit**, **Integration**, and **End-to-End / E2E**).
-* **Model Tier**: High Reasoning (Gemini 2.5 Pro / Claude 3.5 Sonnet).
+* **Model Tier**: High Reasoning (Gemini 3.1 Pro Preview / Claude 3.5 Sonnet).
 * **Core Responsibilities**:
   * **Missing Test Detection**: Identifies critical production classes, public methods, core business rules, and error paths that lack automated tests across unit, integration, and E2E tiers.
   * **Extra Scenarios & Boundary Coverage**: Uncovers omitted edge cases, boundary conditions, invalid inputs, failure modes, concurrency/race hazards, and regression scenarios not currently exercised in existing test suites.
@@ -381,7 +381,7 @@ subagents:
   reliability:
     enabled: true
     provider: "gemini"
-    model: "gemini-2.5-pro"
+    model: "gemini-3.1-pro-preview"
   refactoring:
     enabled: true
     provider: "gemini"
@@ -542,6 +542,6 @@ jobs:
 | **Phase 3** | **Developer Reporting Engine** | - Output generators for developer reports (`audit-run`, `tickets-report`, `security-report`, `code-quality-report`)<br>- Markdown and structured JSON export<br>- `$GITHUB_STEP_SUMMARY` integration |
 | **Phase 4** | **GitHub Projects v2 & Packaging** | - Octokit REST client & GraphQL client for Projects v2<br>- Multi-stage Docker image published to GHCR (`ghcr.io/.../gitgavel`)<br>- GitHub Action `action.yml` wrapper and artifact upload workflow |
 | **Phase 5** | **Test Sentinel Subagent** | - Test Sentinel Agent auditing Unit, Integration, and E2E test suites<br>- Detection of untested business logic, missing edge cases, and flakiness<br>- Report 5 (`5_test-quality-report.md`) generation<br>- Automated triage and GitHub backlog sync for test gaps |
-| **Phase 6** | **Diff-Scoped PR Review Mode** | - Auto-trigger on all Pull Requests (`pull_request` workflow event)<br>- Scope `RepoContext` strictly to files & diff patches changed in the PR<br>- Execute the same System 2 subagents (`SpecDrift`, `Security`, `Refactoring`, `TestSentinel`) on PR changes<br>- Jev `Noul` deduplication against existing PR review comments & consolidated PR review summary publishing |
+| **Phase 6** | **Diff-Scoped PR Review Mode** | - Auto-trigger on all Pull Requests (`pull_request` workflow event)<br>- Scope `RepoContext` strictly to files & diff patches changed in the PR<br>- Execute the same System 2 subagents (`SpecDrift`, `Security`, `Reliability`, `Refactoring`, `TestSentinel`) on PR changes<br>- Jev `Noul` deduplication against existing PR review comments & consolidated PR review summary publishing |
 | **Phase 7** | **Automated Issue Resolution & Closure** | - Issue Resolution Agent matching open GitHub issues against codebase state and `git log` history<br>- Jev `Noul` high-confidence completion verification ($P \ge 0.90$)<br>- Automated closing comment explaining how the issue was fixed with resolving commit SHAs, closing the issue as `completed`, and moving Projects v2 status to `Done` |
 | **Phase 8** | **Reliability & Performance Subagent** | - `ReliabilityAgent` auditing for functional bugs, provable logic defects, crash paths, concurrency hazards, resource leaks, and performance issues/improvements<br>- Integration into full-repo backlog triage, diff-scoped PR reviews, and `4_code-quality-report.md` |

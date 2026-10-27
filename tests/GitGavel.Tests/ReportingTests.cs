@@ -241,6 +241,33 @@ public class ReportingTests
         }
     }
 
+    [Fact]
+    public void CodeQualityReporter_WithNullCategoryFinding_DoesNotThrow()
+    {
+        var findingWithNullCategory = new FindingCandidate
+        {
+            Title = "Finding with null category",
+            Summary = "Summary",
+            Category = null!,
+            Severity = "Medium",
+            FilePath = "src/App.cs",
+            AgentName = "CustomAgent",
+            SuggestedRemediation = "Fix"
+        };
+
+        var ctx = CreateSampleContext(Path.GetTempPath());
+        var ctxWithNullCat = ctx with
+        {
+            Orchestration = ctx.Orchestration with
+            {
+                AllFindings = [findingWithNullCategory]
+            }
+        };
+
+        var act = () => GitGavel.Reporting.Reporters.CodeQualityReporter.Generate(ctxWithNullCat);
+        act.Should().NotThrow();
+    }
+
     private sealed class TestCustomReporter : IReporter
     {
         public string ReportName => "CustomTest";

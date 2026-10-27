@@ -63,7 +63,10 @@ public class GeminiLlmClient : ILlmClient
         payload["generationConfig"] = genConfig;
 
         var json = JsonSerializer.Serialize(payload);
-        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{request.Model}:generateContent?key={_apiKey}";
+        var modelName = request.Model.StartsWith("models/", StringComparison.OrdinalIgnoreCase)
+            ? request.Model["models/".Length..]
+            : request.Model;
+        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{modelName}:generateContent?key={_apiKey}";
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
         {

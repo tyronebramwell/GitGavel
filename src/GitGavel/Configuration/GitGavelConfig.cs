@@ -57,9 +57,9 @@ public class SubagentsConfig
 
     public SubagentSettings Reliability { get; set; } = new()
     {
-        Enabled = false,
+        Enabled = true,
         Provider = "gemini",
-        Model = "gemini-2.5-pro"
+        Model = "gemini-3.1-pro-preview"
     };
 
     public SubagentSettings Refactoring { get; set; } = new()
