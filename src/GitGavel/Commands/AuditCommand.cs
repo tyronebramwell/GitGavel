@@ -198,7 +198,7 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         AnsiConsole.MarkupLine($"[cyan]i[/] Launching [bold]{enabledAgents.Count}[/] System 2 Subagents concurrently: {string.Join(", ", enabledAgents.Select(a => $"[bold]{a}[/]"))}...");
         AnsiConsole.WriteLine();
 
-        var pending = new HashSet<string>(enabledAgents);
+        var pending = new HashSet<string>();
         var progressLock = new object();
         StatusContext? statusContext = null;
 
