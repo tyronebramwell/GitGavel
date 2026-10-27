@@ -290,6 +290,52 @@ public class System2Tests
     }
 
     [Fact]
+    public async Task ReliabilityAgent_ExecuteAsync_WhenLlmThrowsHttpRequestException_ReturnsFailureResult()
+    {
+        var mockClient = new MockLlmClient(_ => throw new HttpRequestException("Gemini API call failed with status code 503 (ServiceUnavailable)"));
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 20, 400, "public class App {}", false)],
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeFalse();
+        result.AgentName.Should().Be("ReliabilityAgent");
+        result.ErrorMessage.Should().Contain("Gemini API call failed with status code 503");
+        result.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ReliabilityAgent_ExecuteAsync_WhenLlmThrowsTimeoutException_ReturnsFailureResult()
+    {
+        var mockClient = new MockLlmClient(_ => throw new TimeoutException("The LLM request timed out after 300 seconds."));
+        var agent = new ReliabilityAgent(mockClient);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/Service.cs", "/mock/src/Service.cs", 30, 600, "public class Service {}", false)],
+            TestFiles = [],
+            SarifFindings = []
+        };
+
+        var result = await agent.ExecuteAsync(context);
+
+        result.Should().NotBeNull();
+        result.IsSuccess.Should().BeFalse();
+        result.AgentName.Should().Be("ReliabilityAgent");
+        result.ErrorMessage.Should().Contain("timed out after 300 seconds");
+        result.Findings.Should().BeEmpty();
+    }
+
+    [Fact]
     public void FindingParser_DecoupledDefectTypeAndTestDefectType_NoCrossPollution()
     {
         // 1. Only defectType provided
