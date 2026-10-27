@@ -15,8 +15,10 @@
 Software repositories suffer from invisible technical debt: specification drift between documentation and code, creeping architectural complexity, and subtle security vulnerabilities that accumulate unnoticed.
 
 **GitGavel** acts as an autonomous backlog sentinel:
-1. **System 2 (Generative Discovery)**: Dispatches specialized LLM subagents in parallel to audit specification divergence, static security advisories (SARIF), reliability & performance bottlenecks, Roslyn-analyzed architectural complexity, automated test completeness, and completed issue verification.
-2. **System 1 (TypeSafe Jev Decision Engine)**: Gates findings through deterministic, probabilistic decision intelligence—evaluating semantic deduplication (`Noul`), urgency/blast radius calibration (`Score` 1–5), issue resolution proof verification, and destination routing (`Choice`).
+1. **System 1 (TypeSafe Jev Decision Engine)**: Operates in two critical stages:
+   * **Pre-Execution Subagent Gating**: Evaluates lightweight PR/commit metadata in <250ms via Jev `Noul` to selectively activate only relevant subagents, slashing LLM token usage by up to 80%.
+   * **Post-Execution Finding & Closure Triage**: Gates findings through probabilistic decision intelligence—evaluating semantic deduplication (`Noul`), urgency/blast radius calibration (`Score` 1–5), issue resolution proof verification, and destination routing (`Choice`).
+2. **System 2 (Generative Discovery)**: Dispatches targeted LLM subagents in parallel to audit specification & README documentation divergence (`SpecDriftAgent`), static security advisories (`SecurityAuditor`), functional reliability & performance bottlenecks (`ReliabilityAgent`), Roslyn-analyzed architectural complexity (`RefactoringAgent`), automated test completeness across unit/integration/E2E tiers (`TestSentinelAgent`), and open issue completion (`IssueResolutionAgent`).
 3. **Developer Reporting Engine**: Emits 5 markdown reports, machine-readable JSON, sticky Pull Request summaries, and GitHub Actions step summaries.
 4. **GitHub Projects (v2) Automation**: Publishes deduplicated GitHub issues tagged with deterministic metadata comments, closes verified fixed issues, and updates Projects v2 Kanban boards via GraphQL.
 
@@ -27,10 +29,18 @@ Software repositories suffer from invisible technical debt: specification drift 
 ```mermaid
 flowchart TD
     subgraph Input["Repository Context"]
-        A[Source Code & AST] 
-        B[Specs & Docs]
-        C[SARIF Reports]
-        Commits[Git History & Open Issues]
+        A["Source Code & AST"] 
+        B["Specs, README & Docs"]
+        C["SARIF Reports"]
+        Commits["Git History & Open Issues"]
+    end
+
+    subgraph PreGating["System 1: Pre-Execution Subagent Gating (Jev Router)"]
+        JevGate["⚡ Jev Noul Gating Questions:\n'Should Spec / Security / Reliability / Refactor / Tests run?'"]
+        Safety["Deterministic Overrides:\nSARIF alerts > 0, spec/README edits, complexity churn, --all-agents"]
+        ActiveSubagents["Targeted Subagent Set\n(Slashing up to 80% token waste)"]
+        JevGate --> ActiveSubagents
+        Safety --> ActiveSubagents
     end
 
     subgraph System2["System 2: Generative Discovery"]
@@ -42,7 +52,7 @@ flowchart TD
         Res["IssueResolutionAgent"]
     end
 
-    subgraph System1["System 1: TypeSafe Jev Decision Engine"]
+    subgraph PostTriage["System 1: Post-Execution Triage & Deduplication"]
         G{"Noul Deduplication"}
         FixProof{"Noul Fix Verification"}
         H["Score Urgency Calibration 1-5"]
@@ -59,9 +69,10 @@ flowchart TD
         O["5_test-quality-report.md"]
     end
 
-    A --> D & E & Rel & F & Test
-    B --> D
-    C --> E
+    A --> JevGate
+    B --> JevGate
+    C --> JevGate
+    ActiveSubagents --> D & E & Rel & F & Test
     Commits --> Res
 
     D & E & Rel & F & Test -->|Finding Candidates| G
@@ -143,24 +154,26 @@ GitGavel provides three Spectre.Console-powered CLI verbs:
 - `-r, --repo <OWNER/REPO>`: Target GitHub repository coordinates (e.g. `octocat/Hello-World`).
 - `--pr <NUMBER>`: Optional Pull Request number to audit for PR reviews and domain reports.
 - `--allow-external-paths`: Explicitly permit configuration, SARIF, or reporting paths outside the repository root.
+- `--all-agents, --no-gate`: Bypass Jev pre-execution subagent gating and execute all configured subagents unconditionally.
 - `--dry-run`: Skip creating GitHub issues and modifying Projects v2 boards.
 - `--mock`: Run with simulated subagents and mock triage.
 - `--mock-llm`: Run with simulated subagents while keeping the live TypeSafe Jev decision engine active.
 
-### Real-Time Subagent Progress Streaming
+### Real-Time Subagent Progress & Jev Gating Streaming
 
-When running `gitgavel audit`, System 2 generative subagents execute concurrently in parallel. The CLI streams real-time progress for each subagent as it runs and completes, showing elapsed execution time, token consumption, findings count, and remaining active agents:
+When running `gitgavel audit`, GitGavel uses TypeSafe Jev to evaluate PR and commit metadata before dispatch, dynamically activating only the subagents relevant to the changes. As subagents run concurrently, the CLI streams real-time progress, showing which agents were safely skipped, elapsed execution times, token counts, and token savings:
 
 ```text
 i Launching 5 System 2 Subagents concurrently: SpecDriftAgent, SecurityAuditor, ReliabilityAgent, RefactoringAgent, TestSentinelAgent...
 
-  ✓ SpecDriftAgent completed in 2.1s (1 finding, 205 tokens) — 4 still running: SecurityAuditor, ReliabilityAgent, RefactoringAgent, TestSentinelAgent
+  ⏭️ SpecDriftAgent skipped: No specification files or API docs modified.
   ✓ SecurityAuditor completed in 4.3s (2 findings, 610 tokens) — 3 still running: ReliabilityAgent, RefactoringAgent, TestSentinelAgent
   ✓ ReliabilityAgent completed in 5.8s (1 finding, 430 tokens) — 2 still running: RefactoringAgent, TestSentinelAgent
   ✓ RefactoringAgent completed in 8.2s (1 finding, 350 tokens) — 1 still running: TestSentinelAgent
   ✓ TestSentinelAgent completed in 11.4s (3 findings, 1,200 tokens) — all subagents complete!
 
-✓ System 2 Discovery complete in 11.4s (Total Tokens: 2,795, Findings: 8)
+✓ System 2 Discovery complete in 11.4s (Total Tokens: 2,590, Findings: 7)
+  ⚡ Jev Subagent Gating saved ~5,000 estimated tokens (1 subagent(s) skipped)
 ```
 
 ---
@@ -174,6 +187,9 @@ scope:
   specs:
     include:
       - "SPECIFICATION.md"
+      - "README.md"
+      - "Dockerfile"
+      - "action.yml"
       - "docs/**/*.md"
       - "specs/**/*.md"
       - "api/openapi.json"
@@ -227,6 +243,12 @@ subagents:
 
 triage:
   engine: "jev"
+  subagentGating:
+    enabled: true                     # Pre-screen subagents with Jev to reduce token usage
+    minConfidence: 0.50               # Minimum Jev Noul probability to activate subagent (default: 0.50)
+    alwaysRunSecurityOnSarifAlerts: true # Hard safety fallback: force SecurityAuditor if SARIF findings exist
+    alwaysRunSpecDriftOnSpecChanges: true # Hard safety fallback: force SpecDrift if specs/README modified
+    bypassInFullRepoMode: true        # Bypasses gating in full repo mode (audits all domains)
   jev:
     apiKeyEnv: "JEV_API_KEY"
     thresholds:
@@ -279,7 +301,7 @@ github:
 
 Every audit run generates 5 structured developer reports in `./reports/`:
 
-1. **`1_audit-run.md`**: Executive summary, run duration, LOC scanned, token counts, and Jev funnel metrics.
+1. **`1_audit-run.md`**: Executive summary, run duration, LOC scanned, token counts, Jev pre-execution gating diagnostics (activated vs skipped agents & token efficiency savings), and Jev triage funnel metrics.
 2. **`2_tickets-report.md` & `.json`**: Actionable tickets accepted to Backlog or routed to Review, with calibrated Jev urgency scores.
 3. **`3_security-report.md`**: Security vulnerability catalog, OWASP classifications, attack vectors, and verified code remediations.
 4. **`4_code-quality-report.md`**: Spec drift catalog, reliability & performance analysis, Roslyn AST cyclomatic complexity hotspots, and refactoring catalog.
@@ -331,7 +353,7 @@ jobs:
 
 ## Testing
 
-Run the full xUnit test suite (147+ unit tests across all System 1 & System 2 subagents, reporters, and CLI pipelines):
+Run the full xUnit test suite (155+ unit tests across all System 1 & System 2 subagents, reporters, and CLI pipelines):
 ```bash
 dotnet test
 ```

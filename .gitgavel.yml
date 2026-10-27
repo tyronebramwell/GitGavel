@@ -3,6 +3,7 @@ scope:
   specs:
     include:
     - SPECIFICATION.md
+    - README.md
     - Dockerfile
     - action.yml
     - docs/**/*.md
