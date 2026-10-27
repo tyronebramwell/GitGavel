@@ -582,6 +582,7 @@ public class GitHubTests
     [InlineData("Reliability", "CodeQuality")]
     [InlineData("Testing", "TestQuality")]
     [InlineData("None", "")]
+    [InlineData("NullCategory", "")]
     public async Task ReportingEngine_PublishPullRequestDomainReports_PostsOnlyMatchingDomainOrNone(string category, string expectedDomain)
     {
         var mock = new MockGitHubService();
@@ -593,7 +594,7 @@ public class GitHubTests
             {
                 Title = $"{category} Finding",
                 Summary = "Test summary",
-                Category = category,
+                Category = category == "NullCategory" ? null! : category,
                 Severity = "Medium",
                 FilePath = "src/Service.cs",
                 StartLine = 10,

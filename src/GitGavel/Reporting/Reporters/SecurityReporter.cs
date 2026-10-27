@@ -18,7 +18,7 @@ public class SecurityReporter : BaseMarkdownReporter
 
         // Filter security findings from all findings
         var securityFindings = ctx.Orchestration.AllFindings
-            .Where(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase))
+            .Where(f => string.Equals(f.Category, "Security", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         var criticalCount = securityFindings.Count(f => f.Severity.Equals("Critical", StringComparison.OrdinalIgnoreCase));

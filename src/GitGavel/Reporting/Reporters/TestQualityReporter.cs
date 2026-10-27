@@ -17,8 +17,8 @@ public class TestQualityReporter : BaseMarkdownReporter
         AppendReportMetadataHeader(sb, "GitGavel Test Quality & Coverage Report", ctx);
 
         var testFindings = ctx.Orchestration.AllFindings
-            .Where(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
-                        f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase))
+            .Where(f => string.Equals(f.Category, "Testing", StringComparison.OrdinalIgnoreCase) ||
+                        (f.AgentName != null && f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
             .ToList();
 
         var unitCount = testFindings.Count(f => string.Equals(f.TestTier, "Unit", StringComparison.OrdinalIgnoreCase));

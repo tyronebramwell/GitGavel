@@ -73,24 +73,24 @@ public class ReportingEngine
             Orchestration = ctx.Orchestration with { AllFindings = activeFindings }
         };
 
-        if (activeFindings.Any(f => f.Category.Equals("Security", StringComparison.OrdinalIgnoreCase)))
+        if (activeFindings.Any(f => string.Equals(f.Category, "Security", StringComparison.OrdinalIgnoreCase)))
         {
             var secBody = SecurityReporter.Generate(filteredCtx) + "\n<!-- gitgavel-sticky-comment: security-report -->\n";
             await gitHubService.PostPullRequestCommentAsync(owner, repo, prNumber, secBody, ct);
             postedDomains.Add("Security");
         }
 
-        if (activeFindings.Any(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase) ||
-                                    f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase) ||
-                                    f.Category.Equals("Reliability", StringComparison.OrdinalIgnoreCase)))
+        if (activeFindings.Any(f => string.Equals(f.Category, "SpecDrift", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(f.Category, "Refactoring", StringComparison.OrdinalIgnoreCase) ||
+                                    string.Equals(f.Category, "Reliability", StringComparison.OrdinalIgnoreCase)))
         {
             var qualBody = CodeQualityReporter.Generate(filteredCtx) + "\n<!-- gitgavel-sticky-comment: code-quality-report -->\n";
             await gitHubService.PostPullRequestCommentAsync(owner, repo, prNumber, qualBody, ct);
             postedDomains.Add("CodeQuality");
         }
 
-        if (activeFindings.Any(f => f.Category.Equals("Testing", StringComparison.OrdinalIgnoreCase) ||
-                                    f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase)))
+        if (activeFindings.Any(f => string.Equals(f.Category, "Testing", StringComparison.OrdinalIgnoreCase) ||
+                                    (f.AgentName != null && f.AgentName.Contains("TestSentinel", StringComparison.OrdinalIgnoreCase))))
         {
             var testBody = TestQualityReporter.Generate(filteredCtx) + "\n<!-- gitgavel-sticky-comment: test-quality-report -->\n";
             await gitHubService.PostPullRequestCommentAsync(owner, repo, prNumber, testBody, ct);

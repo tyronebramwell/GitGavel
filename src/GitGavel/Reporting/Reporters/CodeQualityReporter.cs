@@ -19,7 +19,7 @@ public class CodeQualityReporter : BaseMarkdownReporter
 
         // 1. Spec Drift Analysis
         var specDriftFindings = ctx.Orchestration.AllFindings
-            .Where(f => f.Category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase))
+            .Where(f => string.Equals(f.Category, "SpecDrift", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         sb.AppendLine($"## 1. Specification Drift Analysis ({specDriftFindings.Count} items)");
@@ -64,7 +64,7 @@ public class CodeQualityReporter : BaseMarkdownReporter
 
         // 2. Reliability, Bugs & Performance Analysis
         var reliabilityFindings = ctx.Orchestration.AllFindings
-            .Where(f => f.Category.Equals("Reliability", StringComparison.OrdinalIgnoreCase))
+            .Where(f => string.Equals(f.Category, "Reliability", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         sb.AppendLine($"## 2. Reliability, Bugs & Performance Analysis ({reliabilityFindings.Count} items)");
@@ -137,7 +137,7 @@ public class CodeQualityReporter : BaseMarkdownReporter
 
         // 4. Refactoring Catalog
         var refactoringFindings = ctx.Orchestration.AllFindings
-            .Where(f => f.Category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase))
+            .Where(f => string.Equals(f.Category, "Refactoring", StringComparison.OrdinalIgnoreCase))
             .ToList();
 
         sb.AppendLine($"## 4. Refactoring & Maintainability Catalog ({refactoringFindings.Count} recommendations)");
