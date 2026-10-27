@@ -7,7 +7,9 @@
 * **System 2 (Generative Subagents)**: Deep reasoning agents (powered by Claude/Gemini/OpenAI) audit across specification alignment (`SpecDriftAgent`), security posture (`SecurityAuditorAgent`), functional reliability & performance (`ReliabilityAgent`), code architecture (`RefactoringAgent`), automated test completeness (`TestSentinelAgent`), and open issue completion (`IssueResolutionAgent`).
   * In **Full Repository Audit Mode** (scheduled/manual runs), the subagents audit the full repository scope to maintain the engineering backlog and close completed issues.
   * In **Pull Request Review Mode** (auto-triggered on every PR), the **same subagents** run strictly against the **files and diffs changed in the Pull Request**, generating a consolidated PR review summary and targeted domain reports.
-* **System 1 (Jev Decision Engine)**: A fast, probabilistic decision engine (powered by TypeSafe Jev) validates candidate findings and issue resolution proofs in milliseconds—performing pairwise duplicate checks against existing issues or existing PR review comments via `Noul` probabilities, verifying completed issues via `Noul`, calibrating urgency scoring via `Score`, and routing findings to **GitHub Projects (v2)** columns (`Backlog`, `AI Triage`, `Done`, `Discard`) or **GitHub Pull Request Reviews** (`IncludeInReview`, `Discard`) via `Choice`.
+* **System 1 (Jev Decision Engine)**: A fast, probabilistic decision engine (powered by TypeSafe Jev) that operates in two vital stages:
+  * **Pre-Execution Subagent Gating**: Evaluates lightweight PR/commit metadata (file paths, diff statistics, AST complexity deltas, SARIF alert counts) via Jev `Noul` in <250ms to dynamically activate only the subagents relevant to the changes, slashing LLM token consumption by up to 80% and preventing unnecessary API costs.
+  * **Post-Execution Finding & Closure Triage**: Validates candidate findings and issue resolution proofs in milliseconds—performing pairwise duplicate checks against existing issues or existing PR review comments via `Noul` probabilities, verifying completed issues via `Noul`, calibrating urgency scoring via `Score`, and routing findings to **GitHub Projects (v2)** columns (`Backlog`, `AI Triage`, `Done`, `Discard`) or **GitHub Pull Request Reviews** (`IncludeInReview`, `Discard`) via `Choice`.
 * **Developer Reporting Engine**: Emits dedicated, structured reports (Run Log, Tickets & PR Review Report, Security Report, Code Quality Report, Test Sentinel Report) available both locally and as GitHub Action Step Summaries and downloadable CI artifacts.
 
 ---
@@ -20,6 +22,7 @@
 - **Comprehensive Test Pyramid Auditing**: Automated detection of missing unit, integration, and end-to-end (E2E) tests, extra scenario coverage, and test reliability improvements.
 - **Automated Completed Issue Closure**: Continuous verification of open GitHub issues against the current codebase and git commit history, automatically closing resolved issues with an explanatory comment detailing how the issue was fixed and referencing the specific commit SHAs.
 - **Probabilistic Gatekeeping with Jev**: Sub-second triage, calibrated confidence scoring, high-confidence issue closure verification, and automated routing to an "Unsure / Maintainer Review" queue when confidence is borderline.
+- **Pre-Execution Subagent Gating via Jev**: High-speed, low-cost pre-dispatch triage using Jev `Noul` and deterministic safety rules to dynamically select only relevant subagents, eliminating LLM token waste and API latency on untouched domains.
 - **Pairwise Deduplication via Jev `Noul`**: Probabilistic duplicate detection against existing issues and existing PR review comments without expensive generative LLM calls.
 - **Developer-Centric Reporting**: Comprehensive developer reports for pipeline logs, created/closed tickets, PR review actions, security posture, architectural health, and automated test coverage.
 - **Zero-Infra Context Routing**: Avoids external vector databases in favor of deterministic AST, git history, PR diff, and targeted file routing.
@@ -43,16 +46,24 @@ flowchart TD
         GitHistory["Git Commit History + Existing Issues & PR Comments"]
     end
 
-    subgraph System2 ["2. Discovery & Synthesis (Same Generative Subagents - System 2)"]
-        SpecAgent["📋 Spec Drift Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
-        SecAgent["🛡️ Security Auditor Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
-        RelAgent["🐛 Reliability & Performance Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
+    subgraph PreTriage ["2. Pre-Execution Subagent Gating (Jev Router - System 1)"]
+        JevGate["Jev Noul Gating Questions:\n'Should Spec / Security / Reliability / Refactor / Tests run?'"]
+        SafetyOverrides["Deterministic Safety Rules:\nSARIF alerts > 0, spec edits, complexity churn, --all-agents"]
+        ActiveAgents["Dynamically Activated Subagent Set\n(Slashing up to 80% token waste)"]
+        JevGate --> ActiveAgents
+        SafetyOverrides --> ActiveAgents
+    end
+
+    subgraph System2 ["3. Discovery & Synthesis (Targeted Generative Subagents - System 2)"]
+        SpecAgent["📋 Spec Drift Agent\n(Gemini 3.1 Pro / Claude Sonnet)"]
+        SecAgent["🛡️ Security Auditor Agent\n(Gemini 3.1 Pro / Claude Sonnet)"]
+        RelAgent["🐛 Reliability & Performance Agent\n(Gemini 3.1 Pro / Claude Sonnet)"]
         RefactorAgent["⚙️ Refactor & Architecture Agent\n(Gemini 2.5 Flash / GPT-4o-mini)"]
-        TestAgent["🧪 Test Sentinel Agent\n(Gemini 2.5 Pro / Claude Sonnet)"]
+        TestAgent["🧪 Test Sentinel Agent\n(Gemini 3.1 Pro / Claude Sonnet)"]
         ResolutionAgent["✅ Issue Resolution Agent\n(Gemini 2.5 Flash / Claude Sonnet)"]
     end
 
-    subgraph System1 ["3. Triage & Gatekeeping (Jev Decision Engine - System 1)"]
+    subgraph PostTriage ["4. Post-Execution Triage & Gatekeeping (Jev Decision Engine - System 1)"]
         JevDedupe["Jev Noul (Boolean Probability)\n'Duplicate of Issue #X or Existing PR Comment?'"]
         JevVerifyFix["Jev Noul (Boolean Probability)\n'Is Issue #X truly resolved by commits?'"]
         JevScore["Jev Score (1 - 5)\n'Calibrated Priority & Urgency'"]
@@ -63,16 +74,17 @@ flowchart TD
         JevScore --> JevRoute
     end
 
-    subgraph Targets ["4. Outputs & Execution"]
+    subgraph Targets ["5. Outputs & Execution"]
         GH_Projects["Full Repo Mode:\nCreate Issues, Close Fixed Issues & Sync Projects v2"]
         GH_PR["PR Review Mode:\nPost Consolidated PR Review Summary & Domain Reports"]
-        ReportsEngine["Developer Reporting Engine\n- Audit Run Log\n- Tickets & PR Review Report\n- Security Report\n- Code Quality Report\n- Test Sentinel Report"]
+        ReportsEngine["Developer Reporting Engine\n- Audit Run Log (with Gating Stats)\n- Tickets & PR Review Report\n- Security Report\n- Code Quality Report\n- Test Sentinel Report"]
     end
 
     Config --> FullMode
     Config --> PRMode
-    FullMode --> System2
-    PRMode --> System2
+    FullMode --> JevGate
+    PRMode --> JevGate
+    ActiveAgents --> System2
     GitHistory -.->|Commits & Open Issues| ResolutionAgent
     GitHistory -.->|Existing Issues / PR Comments| JevDedupe
 
@@ -162,11 +174,37 @@ When GitGavel runs in **Pull Request Review Mode** (automatically triggered on `
 
 ---
 
-## 5. Jev Decision Engine (System 1: Triage Gatekeeper)
+## 5. Jev Decision Engine (System 1: Triage Gatekeeper & Router)
 
-Once candidate findings, PR review comments, and issue resolution proofs are generated by the System 2 subagents, they pass through **Jev** for sub-second classification and validation:
+TypeSafe Jev operates across two distinct lifecycle gates: **Pre-Execution Subagent Gating** (routing before System 2 LLM invocation to conserve tokens) and **Post-Execution Finding & Closure Triage** (validating, scoring, and deduplicating generated findings):
 
-### 5.1 Deduplication with Jev `Noul`
+### 5.1 Pre-Execution Subagent Gating with Jev `Noul` (Token Reduction Router)
+Before launching expensive System 2 subagents, GitGavel performs a sub-second pre-execution triage pass using Jev's fast, low-cost `SystemOneAsync` API. By analyzing lightweight context metadata (<300 tokens) instead of full source files, Jev determines whether each domain subagent is genuinely warranted by the current repository or Pull Request changes.
+
+* **Lightweight Input Metadata**:
+  * Modified file paths, extensions, and directory boundaries (e.g. `docs/`, `src/Auth/`, `tests/`).
+  * PR diff patch statistics (number of additions, deletions, modified files).
+  * Specification changes (count of modified specification / OpenAPI documents).
+  * AST structural churn (Roslyn cyclomatic complexity deltas, new high-complexity methods).
+  * Static security alerts (SARIF findings count).
+  * Commit messages and Pull Request title / description.
+* **Gating Evaluation with Jev `Noul`**:
+  * `run_spec_drift`: *"Do the changes modify specifications, API documentation, OpenAPI schemas, or public interface contracts?"*
+  * `run_security`: *"Do the changes touch security-critical code, authentication, authorization, cryptography, data access, network boundaries, or third-party dependencies?"*
+  * `run_reliability`: *"Do the changes modify or introduce asynchronous execution, concurrency, task scheduling, exception handling, resource disposal, or performance-critical loops?"*
+  * `run_refactoring`: *"Do the modified files exhibit significant structural complexity churn, high cyclomatic complexity, or large method modifications?"*
+  * `run_tests`: *"Were new production features or branching logic introduced that require automated unit, integration, or E2E test verification?"*
+* **Gating Threshold & Subagent Activation**:
+  * An enabled subagent is activated if its Jev activation probability $P \ge \text{minConfidence}$ (default: $0.50$).
+  * If $P < \text{minConfidence}$, the subagent is skipped, preventing expensive LLM token consumption and unnecessary API latency.
+* **Deterministic Safety Overrides**:
+  * **SARIF Alert Override**: If `SarifFindings.Count > 0`, `SecurityAuditorAgent` is **always forced to run**, guaranteeing static scan alerts are triaged by the LLM.
+  * **Specification Edit Override**: If `SpecFiles` modified $> 0$, `SpecDriftAgent` is **always forced to run**.
+  * **AST Complexity Override**: If any modified method has Roslyn cyclomatic complexity $\ge 15$, `RefactoringAgent` is **always forced to run**.
+  * **CLI Override (`--all-agents`)**: Passing `--all-agents` (or `--no-gate`) explicitly bypasses Jev pre-execution triage, forcing all configured subagents to run unconditionally.
+  * **Offline / Mock Fallback**: In offline mock modes (`--mock`, `--mock-llm`) or when `triage.subagentGating.enabled: false`, all configured subagents execute without gating.
+
+### 5.2 Deduplication with Jev `Noul`
 * **Primitive**: `Noul` (Boolean probability $0.0 \dots 1.0$).
 * **Queries**:
   * *Issue Deduplication*: `Does candidate finding [Candidate_A] represent the same core problem or refactoring target as existing issue #[Issue_N]?`
@@ -176,7 +214,7 @@ Once candidate findings, PR review comments, and issue resolution proofs are gen
   * $P < \text{humanReviewConfidence}$ ($0.50\text{–}0.60$): Novel finding $\rightarrow$ **Proceed to scoring**.
   * $\text{humanReviewConfidence} \le P < 0.85$: Uncertain $\rightarrow$ Suppress if `P3`; for `P0`–`P2`, add reference to existing issue and route to human review.
 
-### 5.2 Issue Resolution Verification with Jev `Noul`
+### 5.3 Issue Resolution Verification with Jev `Noul`
 * **Primitive**: `Noul` (Boolean probability $0.0 \dots 1.0$).
 * **Query**: `Does the audit resolution verification confirm that the issue has been fixed in the codebase by the cited commits and fix explanation?`
 * **Behavior**:
@@ -184,7 +222,7 @@ Once candidate findings, PR review comments, and issue resolution proofs are gen
   * $0.60 \le P < 0.90$: Partially resolved or uncertain $\rightarrow$ **Post progress comment referencing the commits without closing the issue**.
   * $P < 0.60$: Not resolved $\rightarrow$ **Leave issue open (no action)**.
 
-### 5.3 Calibrated Priority Scoring with Jev `Score`
+### 5.4 Calibrated Priority Scoring with Jev `Score`
 * **Primitive**: `Score` (Scale 1 to 5).
 * **Criteria**: Evaluates real-world blast radius, maintainability impact, and business urgency for both backlog issues and PR review findings.
 * **Mapping**:
@@ -193,7 +231,7 @@ Once candidate findings, PR review comments, and issue resolution proofs are gen
   * Score 3: **P2 (Medium)** — Standard refactoring or backlog improvement.
   * Score 1–2: **P3 / Low** — Minor suggestion or nit.
 
-### 5.4 Automated Routing with Jev `Choice`
+### 5.5 Automated Routing with Jev `Choice`
 * **Primitive**: `Choice`
   * *Backlog & Issue Lifecycle*: `["Backlog", "NeedsHumanReview", "CloseResolved", "Discard"]`
   * *PR Review Actions*: `["IncludeInReview", "Discard"]`
@@ -225,7 +263,8 @@ Designed for maintainers to see exactly what the auditor did during execution:
 * **Execution Metrics**: Start time, duration, git commit SHA, branch, active PR number (if run in PR context).
 * **Scope Scanned**: Total files indexed, spec files parsed, test files discovered, commits analyzed, PR review threads audited, lines of code evaluated.
 * **Agent Diagnostics**: LLM token consumption (input/output), API latency per subagent.
-* **Jev Triage Statistics**: Total findings evaluated, accepted count, duplicate rejections, borderline issues routed to human triage, issues verified & closed, PR review findings summarized, suppressed noise count.
+* **Jev Pre-Execution Gating Diagnostics**: Subagents evaluated, activated vs. skipped breakdown, Jev activation probabilities, safety overrides triggered, and estimated LLM tokens saved.
+* **Jev Post-Execution Triage Statistics**: Total findings evaluated, accepted count, duplicate rejections, borderline issues routed to human triage, issues verified & closed, PR review findings summarized, suppressed noise count.
 
 ### 6.2 Report 2: Tickets & PR Review Report (`2_tickets-report.md` & `.json`)
 A comprehensive status ledger of all actions taken against GitHub Issues and Pull Requests:
@@ -399,9 +438,15 @@ subagents:
     commitLookbackCount: 50           # Number of recent git commits to inspect for fixes
     includeCommitLinks: true          # Cite resolving commit SHAs & explanation in closing comment
 
-# System 1 Triage Gatekeeper (Jev Decision Engine)
+# System 1 Triage Gatekeeper & Pre-Execution Router (Jev Decision Engine)
 triage:
   engine: "jev" # options: "jev" | "llm-synthesizer"
+  subagentGating:
+    enabled: true                     # Pre-screen subagents with Jev to reduce token usage
+    minConfidence: 0.50               # Minimum Jev Noul probability to activate subagent (default: 0.50)
+    alwaysRunSecurityOnSarifAlerts: true # Hard safety fallback: force SecurityAuditor if SARIF findings exist
+    alwaysRunSpecDriftOnSpecChanges: true # Hard safety fallback: force SpecDrift if specs modified
+    bypassInFullRepoMode: false       # Whether to bypass gating in Full Repo mode (default: false)
   jev:
     apiKeyEnv: "JEV_API_KEY"
     thresholds:
@@ -545,3 +590,4 @@ jobs:
 | **Phase 6** | **Diff-Scoped PR Review Mode** | - Auto-trigger on all Pull Requests (`pull_request` workflow event)<br>- Scope `RepoContext` strictly to files & diff patches changed in the PR<br>- Execute the same System 2 subagents (`SpecDrift`, `Security`, `Reliability`, `Refactoring`, `TestSentinel`) on PR changes<br>- Jev `Noul` deduplication against existing PR review comments & consolidated PR review summary publishing |
 | **Phase 7** | **Automated Issue Resolution & Closure** | - Issue Resolution Agent matching open GitHub issues against codebase state and `git log` history<br>- Jev `Noul` high-confidence completion verification ($P \ge 0.90$)<br>- Automated closing comment explaining how the issue was fixed with resolving commit SHAs, closing the issue as `completed`, and moving Projects v2 status to `Done` |
 | **Phase 8** | **Reliability & Performance Subagent** | - `ReliabilityAgent` auditing for functional bugs, provable logic defects, crash paths, concurrency hazards, resource leaks, and performance issues/improvements<br>- Integration into full-repo backlog triage, diff-scoped PR reviews, and `4_code-quality-report.md` |
+| **Phase 9** | **Jev-Powered Subagent Pre-Execution Triage & Gating** | - `ISubagentTriageRouter` & `JevSubagentTriageRouter` evaluating PR/commit metadata via Jev `Noul`<br>- Deterministic safety overrides (SARIF alerts, spec edits, complexity churn, `--all-agents` CLI flag)<br>- Pre-dispatch gating in `SubagentOrchestrator` to skip irrelevant subagents and reduce token usage by up to 80%<br>- Configuration schema (`triage.subagentGating`) in `GitGavelConfig`<br>- Audit run reporting of skipped agents, gating probabilities, and token savings in `1_audit-run.md`<br>- Unit tests verifying gating logic, fallbacks, and deterministic overrides |
