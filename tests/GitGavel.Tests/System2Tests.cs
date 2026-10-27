@@ -2,6 +2,7 @@ using FluentAssertions;
 using GitGavel.Configuration;
 using GitGavel.Discovery;
 using GitGavel.Git;
+using GitGavel.System1.Engines;
 using GitGavel.System1.Models;
 using GitGavel.System2;
 using GitGavel.System2.Abstractions;
@@ -1373,6 +1374,88 @@ public class System2Tests
             Environment.SetEnvironmentVariable("GH_TOKEN", prevGh);
             Environment.SetEnvironmentVariable("GITHUB_TOKEN", prevGithub);
             if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public async Task SubagentOrchestrator_WithGatingEngine_ExecutesOnlyActiveAgentsAndReportsSkipped()
+    {
+        var skippedEvents = new System.Collections.Concurrent.ConcurrentBag<SubagentProgress>();
+        var executedAgentPrompts = new System.Collections.Concurrent.ConcurrentBag<string>();
+
+        var mockClient = new MockLlmClient(req =>
+        {
+            executedAgentPrompts.Add(req.Prompt);
+            return new LlmResponse
+            {
+                Content = "[]",
+                PromptTokens = 25,
+                CompletionTokens = 10,
+                DurationMs = 5,
+                ModelUsed = req.Model
+            };
+        });
+
+        var triageEngine = new MockTriageEngine();
+        var orchestrator = new SubagentOrchestrator(mockClient, triageEngine);
+
+        var prContext = new PullRequestContext
+        {
+            PrNumber = 88,
+            Title = "docs: update API specification",
+            Body = "Update specs",
+            BaseRef = "main",
+            HeadRef = "docs/specs",
+            HeadSha = "1122334",
+            ChangedFiles = [new PullRequestChangedFile("specs/api.md", "modified", 10, 0, "@@ -1,5 +1,15 @@")]
+        };
+
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [new ScannedFile("specs/api.md", "/mock/specs/api.md", 20, 200, "# API", true, DiffPatch: "@@ -1,5 +1,15 @@")],
+            SourceFiles = [],
+            SarifFindings = [],
+            ActivePullRequest = prContext
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig
+                {
+                    Enabled = true,
+                    BypassInFullRepoMode = true,
+                    AlwaysRunSpecDriftOnSpecChanges = true
+                }
+            }
+        };
+
+        Action<SubagentProgress> onProgress = p =>
+        {
+            if (p.Status == SubagentProgressStatus.Skipped)
+            {
+                skippedEvents.Add(p);
+            }
+        };
+
+        var result = await orchestrator.RunAllAsync(repoContext, config, onProgress, CancellationToken.None);
+
+        result.Should().NotBeNull();
+        result.GatingResult.Should().NotBeNull();
+        result.GatingResult!.HasSkippedAgents.Should().BeTrue();
+        result.GatingResult.ActiveAgentNames.Should().ContainSingle().Which.Should().Be("SpecDriftAgent");
+        result.GatingResult.EstimatedTokensSaved.Should().Be(4 * 5000L);
+
+        // SubagentResults should only contain the active SpecDriftAgent
+        result.SubagentResults.Should().ContainSingle().Which.AgentName.Should().Be("SpecDriftAgent");
+
+        // Skipped events should have been emitted for the 4 skipped agents
+        skippedEvents.Select(s => s.AgentName).Should().BeEquivalentTo(["SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent"]);
+        foreach (var s in skippedEvents)
+        {
+            s.SkipReason.Should().NotBeNullOrWhiteSpace();
         }
     }
 }

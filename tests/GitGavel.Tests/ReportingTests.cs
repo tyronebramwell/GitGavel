@@ -268,6 +268,49 @@ public class ReportingTests
         act.Should().NotThrow();
     }
 
+    [Fact]
+    public async Task AuditRunReporter_WithSubagentGatingResult_GeneratesGatingTableAndTokenEfficiencyAlert()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_rep_gating_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var ctx = CreateSampleContext(tempDir);
+            var gatingDecisions = new List<SubagentGatingDecision>
+            {
+                new("SpecDriftAgent", ShouldRun: true, Confidence: 0.95, Reason: "Spec files modified", IsDeterministicOverride: true),
+                new("SecurityAuditor", ShouldRun: false, Confidence: 0.10, Reason: "No security paths touched"),
+                new("ReliabilityAgent", ShouldRun: false, Confidence: 0.15, Reason: "No concurrency modified"),
+                new("RefactoringAgent", ShouldRun: false, Confidence: 0.20, Reason: "No complexity churn"),
+                new("TestSentinelAgent", ShouldRun: true, Confidence: 0.88, Reason: "Business logic added")
+            };
+            var gatingResult = new SubagentGatingResult(gatingDecisions, EstimatedTokensSaved: 15000);
+
+            var ctxWithGating = ctx with
+            {
+                Orchestration = ctx.Orchestration with { GatingResult = gatingResult }
+            };
+
+            var reporter = new GitGavel.Reporting.Reporters.AuditRunReporter();
+            var reports = await reporter.GenerateReportsAsync(ctxWithGating, tempDir);
+            var reportPath = reports.First();
+            var report = await File.ReadAllTextAsync(reportPath);
+
+            report.Should().Contain("## 3. Jev Subagent Pre-Execution Gating");
+            report.Should().Contain("SpecDriftAgent");
+            report.Should().Contain("✅ Active");
+            report.Should().Contain("SecurityAuditor");
+            report.Should().Contain("⏭️ Skipped");
+            report.Should().Contain("Token Efficiency");
+            report.Should().Contain("15,000 LLM tokens");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
     private sealed class TestCustomReporter : IReporter
     {
         public string ReportName => "CustomTest";

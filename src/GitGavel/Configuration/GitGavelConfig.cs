@@ -113,8 +113,18 @@ public class IssueResolutionSubagentSettings : SubagentSettings
 public class TriageConfig
 {
     public string Engine { get; set; } = "jev"; // "jev" | "llm-synthesizer"
+    public SubagentGatingConfig SubagentGating { get; set; } = new();
     public JevConfig Jev { get; set; } = new();
     public int MaxIssuesPerRun { get; set; } = 4;
+}
+
+public class SubagentGatingConfig
+{
+    public bool Enabled { get; set; } = true;
+    public double MinConfidence { get; set; } = 0.50;
+    public bool AlwaysRunSecurityOnSarifAlerts { get; set; } = true;
+    public bool AlwaysRunSpecDriftOnSpecChanges { get; set; } = true;
+    public bool BypassInFullRepoMode { get; set; } = true;
 }
 
 public class JevConfig

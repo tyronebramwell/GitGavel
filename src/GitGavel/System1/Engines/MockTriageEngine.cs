@@ -1,4 +1,5 @@
 using GitGavel.Configuration;
+using GitGavel.Discovery;
 using GitGavel.System1.Abstractions;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
@@ -8,10 +9,137 @@ namespace GitGavel.System1.Engines;
 public class MockTriageEngine : ITriageEngine
 {
     private readonly Func<FindingCandidate, ExistingIssue?, (bool isDuplicate, double prob, double score, string choice)>? _customEvaluator;
+    private readonly Func<RepoContext, IReadOnlyList<string>, GitGavelConfig, SubagentGatingResult>? _customGatingEvaluator;
 
-    public MockTriageEngine(Func<FindingCandidate, ExistingIssue?, (bool isDuplicate, double prob, double score, string choice)>? customEvaluator = null)
+    public MockTriageEngine(
+        Func<FindingCandidate, ExistingIssue?, (bool isDuplicate, double prob, double score, string choice)>? customEvaluator = null,
+        Func<RepoContext, IReadOnlyList<string>, GitGavelConfig, SubagentGatingResult>? customGatingEvaluator = null)
     {
         _customEvaluator = customEvaluator;
+        _customGatingEvaluator = customGatingEvaluator;
+    }
+
+    public Task<SubagentGatingResult> EvaluateSubagentGatingAsync(
+        RepoContext context,
+        IReadOnlyList<string> candidateAgentNames,
+        GitGavelConfig config,
+        CancellationToken ct = default)
+    {
+        if (_customGatingEvaluator != null)
+        {
+            return Task.FromResult(_customGatingEvaluator(context, candidateAgentNames, config));
+        }
+
+        var gatingConfig = config.Triage.SubagentGating;
+        var decisions = new List<SubagentGatingDecision>();
+
+        if (!gatingConfig.Enabled || (gatingConfig.BypassInFullRepoMode && !context.IsPullRequestMode))
+        {
+            foreach (var name in candidateAgentNames)
+            {
+                decisions.Add(new SubagentGatingDecision(
+                    name,
+                    ShouldRun: true,
+                    Confidence: 1.0,
+                    Reason: !gatingConfig.Enabled ? "Subagent gating disabled in configuration." : "Subagent gating bypassed in full repository audit mode.",
+                    IsDeterministicOverride: true));
+            }
+            return Task.FromResult(new SubagentGatingResult(decisions, EstimatedTokensSaved: 0));
+        }
+
+        var hasSpecChanges = context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) ||
+                             context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch));
+        var hasSourceCodeChanges = context.SourceFiles.Any(f => !f.IsTest && !string.IsNullOrEmpty(f.DiffPatch));
+        var hasTestChanges = context.TestFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch));
+        var hasSarif = context.SarifFindings.Count > 0;
+        var hasComplexity = context.AstSummaries.Any(a => a.TotalComplexityScore >= 15 || a.IsComplexityHotspot);
+
+        foreach (var name in candidateAgentNames)
+        {
+            bool shouldRun;
+            double confidence;
+            string reason;
+            bool isOverride = false;
+
+            switch (name)
+            {
+                case "SpecDriftAgent":
+                    if (gatingConfig.AlwaysRunSpecDriftOnSpecChanges && hasSpecChanges)
+                    {
+                        shouldRun = true;
+                        confidence = 0.95;
+                        reason = "Specification documents modified in diff.";
+                        isOverride = true;
+                    }
+                    else
+                    {
+                        shouldRun = hasSpecChanges;
+                        confidence = shouldRun ? 0.90 : 0.15;
+                        reason = shouldRun ? "Spec files or documentation modified." : "No specification files or API docs modified.";
+                    }
+                    break;
+
+                case "SecurityAuditor":
+                    if (gatingConfig.AlwaysRunSecurityOnSarifAlerts && hasSarif)
+                    {
+                        shouldRun = true;
+                        confidence = 1.0;
+                        reason = $"Deterministic override: {context.SarifFindings.Count} SARIF static alerts loaded.";
+                        isOverride = true;
+                    }
+                    else
+                    {
+                        // In mock mode, check if code files modified have security-relevant paths or auth
+                        var securityPaths = context.SourceFiles.Any(f => f.RelativePath.Contains("Auth", StringComparison.OrdinalIgnoreCase) ||
+                                                                        f.RelativePath.Contains("Security", StringComparison.OrdinalIgnoreCase) ||
+                                                                        f.RelativePath.Contains("Key", StringComparison.OrdinalIgnoreCase));
+                        shouldRun = hasSourceCodeChanges && (securityPaths || hasSarif);
+                        confidence = shouldRun ? 0.88 : 0.20;
+                        reason = shouldRun ? "Security-sensitive paths or SARIF alerts modified." : "No security-sensitive changes detected.";
+                    }
+                    break;
+
+                case "ReliabilityAgent":
+                    shouldRun = hasSourceCodeChanges;
+                    confidence = shouldRun ? 0.85 : 0.10;
+                    reason = shouldRun ? "Production source code modified." : "No production source code modified in diff.";
+                    break;
+
+                case "RefactoringAgent":
+                    if (hasComplexity)
+                    {
+                        shouldRun = true;
+                        confidence = 0.92;
+                        reason = "Deterministic override: Roslyn cyclomatic complexity >= 15 detected.";
+                        isOverride = true;
+                    }
+                    else
+                    {
+                        shouldRun = hasSourceCodeChanges;
+                        confidence = shouldRun ? 0.75 : 0.20;
+                        reason = shouldRun ? "Source code files modified." : "No structural code churn detected.";
+                    }
+                    break;
+
+                case "TestSentinelAgent":
+                    shouldRun = hasSourceCodeChanges || hasTestChanges;
+                    confidence = shouldRun ? 0.90 : 0.15;
+                    reason = shouldRun ? "Source or test files modified." : "No test or production code changes.";
+                    break;
+
+                default:
+                    shouldRun = true;
+                    confidence = 0.80;
+                    reason = "Standard agent dispatch.";
+                    break;
+            }
+
+            decisions.Add(new SubagentGatingDecision(name, shouldRun, confidence, reason, isOverride));
+        }
+
+        var skippedCount = decisions.Count(d => !d.ShouldRun);
+        var tokensSaved = skippedCount * 5000L;
+        return Task.FromResult(new SubagentGatingResult(decisions, tokensSaved));
     }
 
     public Task<TriageDecision> EvaluateFindingAsync(
