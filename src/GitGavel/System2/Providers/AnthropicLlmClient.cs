@@ -22,7 +22,10 @@ public class AnthropicLlmClient : ILlmClient, IDisposable
         _apiKey = apiKey ?? "";
         _ownsHttpClient = httpClient == null;
         _httpClient = httpClient ?? new HttpClient();
-        _httpClient.Timeout = timeout ?? TimeSpan.FromSeconds(300);
+        if (_ownsHttpClient)
+        {
+            _httpClient.Timeout = timeout ?? TimeSpan.FromSeconds(300);
+        }
     }
 
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)

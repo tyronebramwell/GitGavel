@@ -306,6 +306,28 @@ public class LlmProviderAndDotEnvTests
     }
 
     [Fact]
+    public async Task LlmClients_WithAlreadyStartedInjectedHttpClient_DoNotMutateTimeoutOrThrowInvalidOperationException()
+    {
+        var handler = new MockHttpMessageHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json")
+        }));
+        using var sharedHttpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(45) };
+
+        // Send a request first so HttpClient marks its properties (like Timeout) as read-only
+        using var initialResp = await sharedHttpClient.GetAsync("https://example.com");
+
+        // Constructing clients with an already-started HttpClient must not throw InvalidOperationException
+        using var gemini = new GeminiLlmClient("key", sharedHttpClient, TimeSpan.FromSeconds(120));
+        using var openAi = new OpenAiLlmClient("key", sharedHttpClient, TimeSpan.FromSeconds(120));
+        using var anthropic = new AnthropicLlmClient("key", sharedHttpClient, TimeSpan.FromSeconds(120));
+
+        gemini.Timeout.Should().Be(TimeSpan.FromSeconds(45));
+        openAi.Timeout.Should().Be(TimeSpan.FromSeconds(45));
+        anthropic.Timeout.Should().Be(TimeSpan.FromSeconds(45));
+    }
+
+    [Fact]
     public void DotEnvLoader_ParsesQuotesExportsCommentsAndPreservesExistingEnvVars()
     {
         var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_dotenv_" + Guid.NewGuid().ToString("N"));
