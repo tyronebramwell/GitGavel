@@ -187,12 +187,12 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             config.Triage.SubagentGating.Enabled = false;
         }
 
-        var jevApiKey = KeyResolver.Resolve(config.Triage.Jev.ApiKey, config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
+        var jevApiKey = KeyResolver.Resolve(config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
         ITriageEngine triageEngine = settings.UseMock || config.Triage.Engine == "llm-synthesizer"
             ? new MockTriageEngine()
             : new TypeSafeJevEngine(jevApiKey);
 
-        var apiKey = KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
+        var apiKey = KeyResolver.Resolve(config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
         var defaultTimeout = TimeSpan.FromSeconds(config.Subagents.TimeoutSeconds > 0 ? config.Subagents.TimeoutSeconds : 300);
 
         var llmClientFactory = new LlmClientFactory(

@@ -66,12 +66,17 @@ public class GeminiLlmClient : ILlmClient
         var modelName = request.Model.StartsWith("models/", StringComparison.OrdinalIgnoreCase)
             ? request.Model["models/".Length..]
             : request.Model;
-        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{modelName}:generateContent?key={_apiKey}";
+        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{modelName}:generateContent";
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
         {
             Content = new StringContent(json, Encoding.UTF8, "application/json")
         };
+
+        if (!string.IsNullOrWhiteSpace(_apiKey))
+        {
+            httpRequest.Headers.Add("x-goog-api-key", _apiKey);
+        }
 
         var httpResponse = await _httpClient.SendAsync(httpRequest, ct);
         sw.Stop();

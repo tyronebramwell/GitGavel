@@ -62,19 +62,19 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         envTable.AddColumn("[bold]Status[/]");
 
         // 1. LLM Key Check
-        var llmKey = KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
+        var llmKey = KeyResolver.Resolve(config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
         var llmStatus = !string.IsNullOrWhiteSpace(llmKey)
             ? "[green]Configured[/]"
             : "[red]Missing (Required)[/]";
-        var llmLabel = !string.IsNullOrWhiteSpace(config.Subagents.ApiKey) ? "subagents.apiKey" : config.Subagents.ApiKeyEnv;
+        var llmLabel = config.Subagents.ApiKeyEnv;
         envTable.AddRow(llmLabel, "Generative LLM subagents (Gemini/Claude)", llmStatus);
 
         // 2. Jev Key Check
-        var jevKey = KeyResolver.Resolve(config.Triage.Jev.ApiKey, config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
+        var jevKey = KeyResolver.Resolve(config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
         var jevStatus = !string.IsNullOrWhiteSpace(jevKey)
             ? "[green]Configured[/]"
             : config.Triage.Engine == "jev" ? "[red]Missing (Required)[/]" : "[yellow]Not Set (Optional)[/]";
-        var jevLabel = !string.IsNullOrWhiteSpace(config.Triage.Jev.ApiKey) ? "triage.jev.apiKey" : config.Triage.Jev.ApiKeyEnv;
+        var jevLabel = config.Triage.Jev.ApiKeyEnv;
         envTable.AddRow(jevLabel, "Jev Decision Engine (Noul, Score, Choice)", jevStatus);
 
         // 3. GitHub Token Check

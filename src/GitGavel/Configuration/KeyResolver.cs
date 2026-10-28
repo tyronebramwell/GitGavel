@@ -2,10 +2,8 @@ namespace GitGavel.Configuration;
 
 public static class KeyResolver
 {
-    public static string? Resolve(string? directKey, string? envVarName, params string[] fallbackEnvVarNames)
+    public static string? Resolve(string? envVarName, params string[] fallbackEnvVarNames)
     {
-        if (!string.IsNullOrWhiteSpace(directKey)) return directKey;
-
         if (!string.IsNullOrWhiteSpace(envVarName))
         {
             var val = Environment.GetEnvironmentVariable(envVarName);

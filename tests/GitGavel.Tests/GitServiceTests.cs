@@ -158,4 +158,45 @@ public class GitServiceTests
         output.Should().NotBeNullOrWhiteSpace();
         output!.Split('\n', StringSplitOptions.TrimEntries).Should().Contain("*");
     }
+
+    [Theory]
+    [InlineData("status && touch /tmp/injected_command.txt")]
+    [InlineData("log; echo hacked")]
+    [InlineData("rev-parse | whoami")]
+    [InlineData("status `echo test`")]
+    [InlineData("status $(echo test)")]
+    public void GitService_RunGitCommand_TreatsShellMetacharactersLiterally_PreventingCommandInjection(string maliciousArg)
+    {
+        var gitService = new GitService();
+        var canaryFile = Path.Combine(Path.GetTempPath(), $"canary_{Guid.NewGuid():N}.txt");
+
+        try
+        {
+            var injectionCommand = $"status && touch \"{canaryFile}\"";
+            gitService.RunGitCommand(Directory.GetCurrentDirectory(), injectionCommand);
+
+            // Injected shell command must NOT execute because ArgumentList bypasses shell evaluation
+            File.Exists(canaryFile).Should().BeFalse();
+
+            // When passed with arbitrary metacharacters, git treats them as literal parameters
+            gitService.RunGitCommand(Directory.GetCurrentDirectory(), maliciousArg);
+        }
+        finally
+        {
+            if (File.Exists(canaryFile)) File.Delete(canaryFile);
+        }
+    }
+
+    [Fact]
+    public void GitService_TokenizeArguments_PreservesQuotedStringsWithSpaces()
+    {
+        var tokens = GitService.TokenizeArguments("log -n 5 --pretty=format:\"COMMIT_START|%H|%h|%s\" --name-only");
+        tokens.Should().BeEquivalentTo([
+            "log",
+            "-n",
+            "5",
+            "--pretty=format:COMMIT_START|%H|%h|%s",
+            "--name-only"
+        ], options => options.WithStrictOrdering());
+    }
 }
