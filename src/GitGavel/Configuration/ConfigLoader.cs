@@ -7,7 +7,7 @@ namespace GitGavel.Configuration;
 
 public static partial class ConfigLoader
 {
-    [GeneratedRegex(@"(?m)^\s*(?:apiKey|api_key)\s*:\s*['""]?\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    [GeneratedRegex(@"(?m)^(?!\s*#)\s*(?:apiKey|api_key)\s*:\s*['""]?\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex DirectApiKeyRegex();
 
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()

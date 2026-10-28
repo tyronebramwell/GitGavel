@@ -200,4 +200,25 @@ public class ConfigurationSecurityTests
         config.Subagents.ApiKeyEnv.Should().Be("CUSTOM_LLM_KEY");
         config.Triage.Jev.ApiKeyEnv.Should().Be("CUSTOM_JEV_KEY");
     }
+
+    [Fact]
+    public void LoadFromString_WithCommentedOutApiKey_Succeeds()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          apiKeyEnv: "AI_API_KEY"
+          # apiKey: "your-api-key-here"
+          #   apiKey: "nested commented key"
+          # api_key: "snake_case commented key"
+        triage:
+          engine: "jev"
+          jev:
+            apiKeyEnv: "JEV_API_KEY"
+            # apiKey: "jev_key_here"
+        """;
+
+        var act = () => ConfigLoader.LoadFromString(yaml);
+        act.Should().NotThrow();
+    }
 }
