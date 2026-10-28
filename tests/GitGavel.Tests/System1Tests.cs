@@ -636,6 +636,42 @@ public class System1Tests
     }
 
     [Fact]
+    public async Task MockTriageEngine_SubagentGating_InFullRepoMode_WhenBypassIsFalse_SelectivelyGatesAgentsBasedOnRepoContext()
+    {
+        var engine = new MockTriageEngine();
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 50, 1000, "class App {}", false)],
+            TestFiles = [new ScannedFile("tests/AppTests.cs", "/mock/tests/AppTests.cs", 20, 500, "class AppTests {}", false, true)],
+            SarifFindings = [],
+            AstSummaries = [new FileAstSummary("src/App.cs", [], 20, true)]
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig
+                {
+                    Enabled = true,
+                    BypassInFullRepoMode = false
+                }
+            }
+        };
+
+        var candidateAgents = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidateAgents, config);
+
+        result.Should().NotBeNull();
+        result.Decisions.Should().HaveCount(5);
+        result.ActiveAgentNames.Should().BeEquivalentTo(["ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent"]);
+        result.SkippedAgentNames.Should().BeEquivalentTo(["SpecDriftAgent", "SecurityAuditor"]);
+        result.EstimatedTokensSaved.Should().Be(10000L);
+    }
+
+    [Fact]
     public async Task MockTriageEngine_SubagentGating_WhenMarkdownOnlyDiff_ActivatesSpecDriftAndSkipsCodeAgents()
     {
         var engine = new MockTriageEngine();
@@ -803,6 +839,51 @@ public class System1Tests
         result.ActiveAgentNames.Should().BeEquivalentTo(["ReliabilityAgent", "TestSentinelAgent"]);
         result.SkippedAgentNames.Should().BeEquivalentTo(["SpecDriftAgent", "SecurityAuditor", "RefactoringAgent"]);
         result.EstimatedTokensSaved.Should().Be(3 * 5000L);
+    }
+
+    [Fact]
+    public async Task TypeSafeJevEngine_SubagentGating_InFullRepoMode_WhenBypassIsFalse_EvaluatesJevSystemOne()
+    {
+        var mockJev = new Mock<IJevClient>();
+
+        var gatingResponse = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["run_spec_drift"] = new NoulAnswer { Noul = 0.10 },
+                ["run_security"] = new NoulAnswer { Noul = 0.20 },
+                ["run_reliability"] = new NoulAnswer { Noul = 0.90 },
+                ["run_refactoring"] = new NoulAnswer { Noul = 0.40 },
+                ["run_tests"] = new NoulAnswer { Noul = 0.85 }
+            }
+        };
+
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.IsAny<IReadOnlyDictionary<string, Question>>(),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(gatingResponse);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+        // Full repo mode (no PR)
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/Worker.cs", "/mock/src/Worker.cs", 50, 500, "class Worker {}", false)],
+            SarifFindings = []
+        };
+
+        var config = new GitGavelConfig(); // SubagentGating defaults to Enabled = true, BypassInFullRepoMode = false
+
+        var candidateAgents = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidateAgents, config);
+
+        result.Should().NotBeNull();
+        result.ActiveAgentNames.Should().BeEquivalentTo(["ReliabilityAgent", "TestSentinelAgent"]);
+        result.SkippedAgentNames.Should().BeEquivalentTo(["SpecDriftAgent", "SecurityAuditor", "RefactoringAgent"]);
+        result.EstimatedTokensSaved.Should().Be(15000L);
     }
 
     [Fact]

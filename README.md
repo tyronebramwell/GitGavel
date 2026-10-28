@@ -248,7 +248,7 @@ triage:
     minConfidence: 0.50               # Minimum Jev Noul probability to activate subagent (default: 0.50)
     alwaysRunSecurityOnSarifAlerts: true # Hard safety fallback: force SecurityAuditor if SARIF findings exist
     alwaysRunSpecDriftOnSpecChanges: true # Hard safety fallback: force SpecDrift if specs/README modified
-    bypassInFullRepoMode: true        # Bypasses gating in full repo mode (audits all domains)
+    bypassInFullRepoMode: false       # Whether to bypass gating in full repo mode (default: false)
   jev:
     apiKeyEnv: "JEV_API_KEY"
     thresholds:

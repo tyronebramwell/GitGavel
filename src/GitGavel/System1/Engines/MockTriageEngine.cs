@@ -47,10 +47,15 @@ public class MockTriageEngine : ITriageEngine
             return Task.FromResult(new SubagentGatingResult(decisions, EstimatedTokensSaved: 0));
         }
 
-        var hasSpecChanges = context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) ||
-                             context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch));
-        var hasSourceCodeChanges = context.SourceFiles.Any(f => !f.IsTest && !string.IsNullOrEmpty(f.DiffPatch));
-        var hasTestChanges = context.TestFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch));
+        var hasSpecChanges = context.IsPullRequestMode
+            ? context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch))
+            : context.SpecFiles.Count > 0 || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
+        var hasSourceCodeChanges = context.IsPullRequestMode
+            ? context.SourceFiles.Any(f => !f.IsTest && !string.IsNullOrEmpty(f.DiffPatch))
+            : context.SourceFiles.Any(f => !f.IsTest);
+        var hasTestChanges = context.IsPullRequestMode
+            ? context.TestFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch))
+            : context.TestFiles.Count > 0;
         var hasSarif = context.SarifFindings.Count > 0;
         var hasComplexity = context.AstSummaries.Any(a => a.TotalComplexityScore >= 15 || a.IsComplexityHotspot);
 
@@ -68,14 +73,18 @@ public class MockTriageEngine : ITriageEngine
                     {
                         shouldRun = true;
                         confidence = 0.95;
-                        reason = "Specification documents modified in diff.";
+                        reason = context.IsPullRequestMode
+                            ? "Specification documents modified in diff."
+                            : "Specification documents present in repository.";
                         isOverride = true;
                     }
                     else
                     {
                         shouldRun = hasSpecChanges;
                         confidence = shouldRun ? 0.90 : 0.15;
-                        reason = shouldRun ? "Spec files or documentation modified." : "No specification files or API docs modified.";
+                        reason = shouldRun
+                            ? (context.IsPullRequestMode ? "Spec files or documentation modified." : "Spec files present in repository.")
+                            : (context.IsPullRequestMode ? "No specification files or API docs modified." : "No specification files found in repository scope.");
                     }
                     break;
 
@@ -89,20 +98,24 @@ public class MockTriageEngine : ITriageEngine
                     }
                     else
                     {
-                        // In mock mode, check if code files modified have security-relevant paths or auth
+                        // In mock mode, check if code files have security-relevant paths or auth
                         var securityPaths = context.SourceFiles.Any(f => f.RelativePath.Contains("Auth", StringComparison.OrdinalIgnoreCase) ||
                                                                         f.RelativePath.Contains("Security", StringComparison.OrdinalIgnoreCase) ||
                                                                         f.RelativePath.Contains("Key", StringComparison.OrdinalIgnoreCase));
                         shouldRun = hasSourceCodeChanges && (securityPaths || hasSarif);
                         confidence = shouldRun ? 0.88 : 0.20;
-                        reason = shouldRun ? "Security-sensitive paths or SARIF alerts modified." : "No security-sensitive changes detected.";
+                        reason = shouldRun
+                            ? "Security-sensitive paths or SARIF alerts detected."
+                            : "No security-sensitive changes or alerts detected.";
                     }
                     break;
 
                 case "ReliabilityAgent":
                     shouldRun = hasSourceCodeChanges;
                     confidence = shouldRun ? 0.85 : 0.10;
-                    reason = shouldRun ? "Production source code modified." : "No production source code modified in diff.";
+                    reason = shouldRun
+                        ? (context.IsPullRequestMode ? "Production source code modified." : "Production source code present in repository.")
+                        : (context.IsPullRequestMode ? "No production source code modified in diff." : "No production source code found in repository.");
                     break;
 
                 case "RefactoringAgent":
@@ -117,14 +130,18 @@ public class MockTriageEngine : ITriageEngine
                     {
                         shouldRun = hasSourceCodeChanges;
                         confidence = shouldRun ? 0.75 : 0.20;
-                        reason = shouldRun ? "Source code files modified." : "No structural code churn detected.";
+                        reason = shouldRun
+                            ? (context.IsPullRequestMode ? "Source code files modified." : "Source code files present in repository.")
+                            : (context.IsPullRequestMode ? "No structural code churn detected." : "No source files found in repository.");
                     }
                     break;
 
                 case "TestSentinelAgent":
                     shouldRun = hasSourceCodeChanges || hasTestChanges;
                     confidence = shouldRun ? 0.90 : 0.15;
-                    reason = shouldRun ? "Source or test files modified." : "No test or production code changes.";
+                    reason = shouldRun
+                        ? (context.IsPullRequestMode ? "Source or test files modified." : "Source or test files present in repository.")
+                        : (context.IsPullRequestMode ? "No test or production code changes." : "No source or test files found in repository.");
                     break;
 
                 default:

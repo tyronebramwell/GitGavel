@@ -124,7 +124,7 @@ public class SubagentGatingConfig
     public double MinConfidence { get; set; } = 0.50;
     public bool AlwaysRunSecurityOnSarifAlerts { get; set; } = true;
     public bool AlwaysRunSpecDriftOnSpecChanges { get; set; } = true;
-    public bool BypassInFullRepoMode { get; set; } = true;
+    public bool BypassInFullRepoMode { get; set; } = false;
 }
 
 public class JevConfig
