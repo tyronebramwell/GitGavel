@@ -165,7 +165,7 @@ public class GitHubProjectsV2Client
         }
     }
 
-    private static bool TryExtractProjectElement(JsonElement root, out JsonElement projectElem)
+    public static bool TryExtractProjectElement(JsonElement root, out JsonElement projectElem)
     {
         projectElem = default;
         if (!root.TryGetProperty("data", out var data) || data.ValueKind != JsonValueKind.Object)
@@ -194,7 +194,7 @@ public class GitHubProjectsV2Client
         return false;
     }
 
-    private static string? FindOptionId(JsonElement fieldNode, string targetOptionName)
+    public static string? FindOptionId(JsonElement fieldNode, string targetOptionName)
     {
         if (!fieldNode.TryGetProperty("options", out var options) || options.ValueKind != JsonValueKind.Array)
         {
@@ -215,7 +215,7 @@ public class GitHubProjectsV2Client
         return null;
     }
 
-    private static bool HasGraphQLErrors(JsonElement root, out string errorMessage)
+    public static bool HasGraphQLErrors(JsonElement root, out string errorMessage)
     {
         errorMessage = string.Empty;
         if (!root.TryGetProperty("errors", out var errors) || errors.ValueKind != JsonValueKind.Array || errors.GetArrayLength() == 0)
@@ -230,12 +230,12 @@ public class GitHubProjectsV2Client
         return true;
     }
 
-    private async Task SetProjectFieldAsync(string projectId, string itemId, string fieldId, string optionId, CancellationToken ct)
+    public async Task SetProjectFieldAsync(string projectId, string itemId, string fieldId, string optionId, CancellationToken ct = default)
     {
         await ExecuteGraphQLAsync(UpdateFieldValueMutation, new { projectId, itemId, fieldId, optionId }, ct);
     }
 
-    private async Task<string> ExecuteGraphQLAsync(string query, object variables, CancellationToken ct)
+    public async Task<string> ExecuteGraphQLAsync(string query, object variables, CancellationToken ct = default)
     {
         var payload = JsonSerializer.Serialize(new { query, variables });
         using var req = new HttpRequestMessage(HttpMethod.Post, "https://api.github.com/graphql")

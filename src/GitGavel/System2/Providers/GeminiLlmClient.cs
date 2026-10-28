@@ -32,9 +32,9 @@ public class GeminiLlmClient : ILlmClient, IDisposable
 
         var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
 
-        var payload = new
+        var payload = new Dictionary<string, object>
         {
-            contents = new[]
+            ["contents"] = new[]
             {
                 new
                 {
@@ -42,12 +42,20 @@ public class GeminiLlmClient : ILlmClient, IDisposable
                     parts = new[] { new { text = request.Prompt } }
                 }
             },
-            generationConfig = new
+            ["generationConfig"] = new
             {
                 temperature = request.Temperature,
                 responseMimeType = request.ExpectJson ? "application/json" : "text/plain"
             }
         };
+
+        if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
+        {
+            payload["systemInstruction"] = new
+            {
+                parts = new[] { new { text = request.SystemPrompt } }
+            };
+        }
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
         {

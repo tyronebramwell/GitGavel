@@ -1133,6 +1133,95 @@ public class GitHubTests
         capturedBodies.Should().NotContain(b => b.Contains("updateProjectV2ItemFieldValue"));
     }
 
+    [Fact]
+    public void GitHubProjectsV2Client_TryExtractProjectElement_HandlesUserOrganizationAndMissingData()
+    {
+        using var userDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "user": { "projectV2": { "id": "PVT_user" } } } }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(userDoc.RootElement, out var userProj).Should().BeTrue();
+        userProj.GetProperty("id").GetString().Should().Be("PVT_user");
+
+        using var orgDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "organization": { "projectV2": { "id": "PVT_org" } } } }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(orgDoc.RootElement, out var orgProj).Should().BeTrue();
+        orgProj.GetProperty("id").GetString().Should().Be("PVT_org");
+
+        using var emptyDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "user": null, "organization": null } }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(emptyDoc.RootElement, out _).Should().BeFalse();
+
+        using var noDataDoc = System.Text.Json.JsonDocument.Parse("""{ "errors": [] }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(noDataDoc.RootElement, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void GitHubProjectsV2Client_FindOptionId_MatchesCaseInsensitivelyAndReturnsNullWhenMissing()
+    {
+        using var fieldDoc = System.Text.Json.JsonDocument.Parse("""
+        {
+          "id": "PVTSSF_1",
+          "name": "Status",
+          "options": [
+            { "id": "OPT_1", "name": "Backlog" },
+            { "id": "OPT_2", "name": "Done" }
+          ]
+        }
+        """);
+
+        GitHubProjectsV2Client.FindOptionId(fieldDoc.RootElement, "backlog").Should().Be("OPT_1");
+        GitHubProjectsV2Client.FindOptionId(fieldDoc.RootElement, "DONE").Should().Be("OPT_2");
+        GitHubProjectsV2Client.FindOptionId(fieldDoc.RootElement, "NonExistent").Should().BeNull();
+
+        using var noOptionsDoc = System.Text.Json.JsonDocument.Parse("""{ "id": "PVTSSF_2", "name": "TextField" }""");
+        GitHubProjectsV2Client.FindOptionId(noOptionsDoc.RootElement, "Backlog").Should().BeNull();
+    }
+
+    [Fact]
+    public void GitHubProjectsV2Client_HasGraphQLErrors_ExtractsFirstMessageOrReturnsFalseWhenNoErrors()
+    {
+        using var okDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "viewer": { "login": "octocat" } } }""");
+        GitHubProjectsV2Client.HasGraphQLErrors(okDoc.RootElement, out var noErr).Should().BeFalse();
+        noErr.Should().BeEmpty();
+
+        using var errDoc = System.Text.Json.JsonDocument.Parse("""{ "errors": [{ "message": "Field 'projectV2' doesn't exist" }] }""");
+        GitHubProjectsV2Client.HasGraphQLErrors(errDoc.RootElement, out var msg).Should().BeTrue();
+        msg.Should().Be("Field 'projectV2' doesn't exist");
+
+        using var rawErrDoc = System.Text.Json.JsonDocument.Parse("""{ "errors": ["Raw error string"] }""");
+        GitHubProjectsV2Client.HasGraphQLErrors(rawErrDoc.RootElement, out var rawMsg).Should().BeTrue();
+        rawMsg.Should().Contain("Raw error string");
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SetProjectFieldAsyncAndExecuteGraphQLAsync_SendsCorrectGraphQlPayloadAndHeaders()
+    {
+        string? capturedBody = null;
+        string? capturedAuth = null;
+        string? capturedUserAgent = null;
+
+        var handler = new DelegateHttpMessageHandler(async (req, ct) =>
+        {
+            capturedAuth = req.Headers.Authorization?.ToString();
+            capturedUserAgent = req.Headers.UserAgent.ToString();
+            capturedBody = await req.Content!.ReadAsStringAsync(ct);
+
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent("""{ "data": { "updateProjectV2ItemFieldValue": { "projectV2Item": { "id": "PVTI_1" } } } }""", System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+        var client = new GitHubProjectsV2Client(httpClient, "ghp_direct_token");
+
+        await client.SetProjectFieldAsync("PVT_proj", "PVTI_item", "PVTSSF_field", "OPT_val");
+
+        capturedAuth.Should().Be("Bearer ghp_direct_token");
+        capturedUserAgent.Should().Contain("GitGavel/1.0");
+        capturedBody.Should().Contain("updateProjectV2ItemFieldValue");
+        capturedBody.Should().Contain("PVT_proj");
+        capturedBody.Should().Contain("PVTI_item");
+        capturedBody.Should().Contain("PVTSSF_field");
+        capturedBody.Should().Contain("OPT_val");
+    }
+
     private sealed class DelegateHttpMessageHandler(Func<System.Net.Http.HttpRequestMessage, CancellationToken, Task<System.Net.Http.HttpResponseMessage>> handler) : System.Net.Http.HttpMessageHandler
     {
         protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken cancellationToken)

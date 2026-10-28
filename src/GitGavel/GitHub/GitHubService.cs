@@ -34,6 +34,14 @@ public partial class GitHubService : IGitHubService, IDisposable
         };
         _ownsHttpClient = httpClient == null;
         _httpClient = httpClient ?? new HttpClient();
+        if (_ownsHttpClient)
+        {
+            _httpClient.DefaultRequestHeaders.UserAgent.Add(new System.Net.Http.Headers.ProductInfoHeaderValue("GitGavel", "1.0"));
+            if (!string.IsNullOrWhiteSpace(_token))
+            {
+                _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _token);
+            }
+        }
         _projectsClient = new GitHubProjectsV2Client(_httpClient, _token, _onWarning);
     }
 

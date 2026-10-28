@@ -34,16 +34,24 @@ public class OpenAiLlmClient : ILlmClient, IDisposable
         using var reqMsg = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions");
         reqMsg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var payload = new
+        var messages = new List<object>();
+        if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
         {
-            model,
-            temperature = request.Temperature,
-            messages = new[]
-            {
-                new { role = "system", content = "You are an autonomous enterprise software auditing agent. Respond ONLY with a valid JSON array." },
-                new { role = "user", content = request.Prompt }
-            }
+            messages.Add(new { role = "system", content = request.SystemPrompt });
+        }
+        messages.Add(new { role = "user", content = request.Prompt });
+
+        var payload = new Dictionary<string, object>
+        {
+            ["model"] = model,
+            ["temperature"] = request.Temperature,
+            ["messages"] = messages
         };
+
+        if (request.ExpectJson)
+        {
+            payload["response_format"] = new { type = "json_object" };
+        }
 
         reqMsg.Content = JsonContent.Create(payload);
 

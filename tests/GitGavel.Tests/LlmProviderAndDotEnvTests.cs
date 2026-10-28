@@ -56,6 +56,7 @@ public class LlmProviderAndDotEnvTests
         var response = await client.GenerateAsync(new LlmRequest
         {
             Prompt = "Audit this code",
+            SystemPrompt = "You are a strict Gemini auditor.",
             Model = "gemini-2.5-pro",
             Temperature = 0.1,
             ExpectJson = true
@@ -67,6 +68,8 @@ public class LlmProviderAndDotEnvTests
         response.TotalTokens.Should().Be(207);
         response.ModelUsed.Should().Be("gemini-2.5-pro");
         capturedBody.Should().Contain("application/json");
+        capturedBody.Should().Contain("systemInstruction");
+        capturedBody.Should().Contain("You are a strict Gemini auditor.");
     }
 
     [Theory]
@@ -140,12 +143,16 @@ public class LlmProviderAndDotEnvTests
         var response = await client.GenerateAsync(new LlmRequest
         {
             Prompt = "Audit OpenAI",
-            Model = "gemini-2.5-pro"
+            SystemPrompt = "You are a strict OpenAI auditor.",
+            Model = "gemini-2.5-pro",
+            ExpectJson = true
         });
 
         authScheme.Should().Be("Bearer");
         authParam.Should().Be("sk-test-openai");
         requestBody.Should().Contain("\"model\":\"gpt-4o\"");
+        requestBody.Should().Contain("You are a strict OpenAI auditor.");
+        requestBody.Should().Contain("\"response_format\":{\"type\":\"json_object\"}");
         response.Content.Should().Be("[{\"title\":\"OpenAI Finding\"}]");
         response.PromptTokens.Should().Be(200);
         response.CompletionTokens.Should().Be(80);
@@ -221,12 +228,14 @@ public class LlmProviderAndDotEnvTests
         var response = await client.GenerateAsync(new LlmRequest
         {
             Prompt = "Audit Anthropic",
+            SystemPrompt = "You are a strict Anthropic auditor.",
             Model = "gemini-2.5-pro"
         });
 
         apiKeyHeader.Should().Be("sk-ant-test");
         versionHeader.Should().Be("2023-06-01");
         requestBody.Should().Contain("\"model\":\"claude-3-5-sonnet-20241022\"");
+        requestBody.Should().Contain("\"system\":\"You are a strict Anthropic auditor.\"");
         response.Content.Should().Be("[{\"title\":\"Anthropic Finding\"}]");
         response.PromptTokens.Should().Be(310);
         response.CompletionTokens.Should().Be(95);

@@ -34,16 +34,21 @@ public class AnthropicLlmClient : ILlmClient, IDisposable
         reqMsg.Headers.Add("x-api-key", _apiKey);
         reqMsg.Headers.Add("anthropic-version", "2023-06-01");
 
-        var payload = new
+        var payload = new Dictionary<string, object>
         {
-            model,
-            max_tokens = 4096,
-            temperature = request.Temperature,
-            messages = new[]
+            ["model"] = model,
+            ["max_tokens"] = 4096,
+            ["temperature"] = request.Temperature,
+            ["messages"] = new[]
             {
                 new { role = "user", content = request.Prompt }
             }
         };
+
+        if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
+        {
+            payload["system"] = request.SystemPrompt;
+        }
 
         reqMsg.Content = JsonContent.Create(payload);
 
