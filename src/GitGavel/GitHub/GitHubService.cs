@@ -76,7 +76,7 @@ public partial class GitHubService : IGitHubService, IDisposable
                     );
                 }).ToList();
         }
-        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is ApiException or HttpRequestException)
         {
             _onWarning?.Invoke($"Failed to fetch existing issues for {owner}/{repo}: {ex.Message}");
             return [];
@@ -272,7 +272,7 @@ public partial class GitHubService : IGitHubService, IDisposable
                 }).ToList()
             };
         }
-        catch (Exception ex) when (ex is ApiException or HttpRequestException or TaskCanceledException)
+        catch (Exception ex) when (ex is ApiException or HttpRequestException)
         {
             _onWarning?.Invoke($"Failed to fetch Pull Request #{prNumber} context for {owner}/{repo}: {ex.Message}");
             return null;

@@ -37,7 +37,9 @@ public class ProcessRunner : IProcessRunner
             using var process = Process.Start(psi);
             if (process == null) return null;
 
-            var output = process.StandardOutput.ReadToEnd();
+            var outputTask = process.StandardOutput.ReadToEndAsync();
+            var errorTask = process.StandardError.ReadToEndAsync();
+
             if (!process.WaitForExit(timeoutMs))
             {
                 try { process.Kill(entireProcessTree: true); } catch (InvalidOperationException) { }
@@ -45,13 +47,12 @@ public class ProcessRunner : IProcessRunner
                 return null;
             }
 
+            var output = outputTask.GetAwaiter().GetResult();
             if (process.ExitCode != 0)
             {
-                var err = process.StandardError.ReadToEnd();
-                if (!string.IsNullOrWhiteSpace(err))
-                {
-                    onError?.Invoke($"Process '{fileName}' exited with code {process.ExitCode}: {err.Trim()}");
-                }
+                var err = errorTask.GetAwaiter().GetResult();
+                var suffix = string.IsNullOrWhiteSpace(err) ? "" : $": {err.Trim()}";
+                onError?.Invoke($"Process '{fileName}' exited with code {process.ExitCode}{suffix}");
                 return null;
             }
 

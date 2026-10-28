@@ -159,7 +159,7 @@ public class GitHubProjectsV2Client
                 }
             }
         }
-        catch (Exception ex) when (ex is HttpRequestException or JsonException or TaskCanceledException)
+        catch (Exception ex) when (ex is HttpRequestException or JsonException)
         {
             _onWarning?.Invoke($"Projects v2 synchronization failed: {ex.Message}");
         }

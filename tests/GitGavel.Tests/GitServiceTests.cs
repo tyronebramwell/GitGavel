@@ -264,6 +264,54 @@ public class GitServiceTests
         }
     }
 
+    [Fact]
+    public void ProcessRunner_Run_WhenProcessTimesOut_KillsProcessReturnsNullAndInvokesOnError()
+    {
+        var runner = new ProcessRunner();
+        string? capturedError = null;
+
+        var result = runner.Run(
+            "sleep",
+            Directory.GetCurrentDirectory(),
+            ["3"],
+            timeoutMs: 80,
+            onError: msg => capturedError = msg);
+
+        result.Should().BeNull();
+        capturedError.Should().NotBeNullOrWhiteSpace();
+        capturedError.Should().Contain("timed out after 80ms");
+    }
+
+    [Fact]
+    public void ProcessRunner_Run_WhenProcessExitsNonZeroOrBinaryMissing_ReturnsNullAndInvokesOnError()
+    {
+        var runner = new ProcessRunner();
+        string? exitError = null;
+
+        var nonZeroResult = runner.Run(
+            "git",
+            Directory.GetCurrentDirectory(),
+            ["invalid-git-subcommand-xyz"],
+            timeoutMs: 5000,
+            onError: msg => exitError = msg);
+
+        nonZeroResult.Should().BeNull();
+        exitError.Should().NotBeNullOrWhiteSpace();
+        exitError.Should().Contain("exited with code");
+
+        string? missingBinError = null;
+        var missingResult = runner.Run(
+            "nonexistent-executable-binary-xyz-999",
+            Directory.GetCurrentDirectory(),
+            ["--version"],
+            timeoutMs: 5000,
+            onError: msg => missingBinError = msg);
+
+        missingResult.Should().BeNull();
+        missingBinError.Should().NotBeNullOrWhiteSpace();
+        missingBinError.Should().Contain("Failed to execute");
+    }
+
     private sealed class DictEnvProvider(Dictionary<string, string?> vars) : GitGavel.Configuration.IEnvironmentProvider
     {
         public string? GetEnvironmentVariable(string variable) => vars.TryGetValue(variable, out var v) ? v : null;

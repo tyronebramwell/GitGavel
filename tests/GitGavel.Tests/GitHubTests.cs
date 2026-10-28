@@ -1005,6 +1005,132 @@ public class GitHubTests
         var issues = await service.GetExistingIssuesAsync("org", "repo");
         issues.Should().BeEmpty();
         warningMsg.Should().Contain("Secondary rate limit");
+
+        // When GetAllForRepository throws TaskCanceledException, it propagates instead of being swallowed
+        mockIssues
+            .Setup(i => i.GetAllForRepository(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<Octokit.RepositoryIssueRequest>(),
+                It.IsAny<Octokit.ApiOptions>()))
+            .ThrowsAsync(new TaskCanceledException("Operation canceled by user"));
+
+        var cancelAct = () => service.GetExistingIssuesAsync("org", "repo");
+        await cancelAct.Should().ThrowAsync<TaskCanceledException>();
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SyncNodeToProjectV2Async_WhenMissingTokenDisabledOrEmptyNodeId_ReturnsEarlyWithoutHttpCalls()
+    {
+        var callCount = 0;
+        var handler = new DelegateHttpMessageHandler((_, _) =>
+        {
+            callCount++;
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        });
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+
+        // 1. Empty token
+        var emptyTokenClient = new GitHubProjectsV2Client(httpClient, "");
+        await emptyTokenClient.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", new ProjectsV2Config { Enabled = true });
+        callCount.Should().Be(0);
+
+        // 2. Disabled in config
+        var validClient = new GitHubProjectsV2Client(httpClient, "ghp_token");
+        await validClient.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", new ProjectsV2Config { Enabled = false });
+        callCount.Should().Be(0);
+
+        // 3. Empty contentNodeId
+        await validClient.SyncNodeToProjectV2Async("org", "   ", "Backlog", "P1", new ProjectsV2Config { Enabled = true });
+        callCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SyncNodeToProjectV2Async_WhenProjectIdOrItemIdMissing_StopsEarlyWithoutFieldMutations()
+    {
+        var capturedBodies = new List<string>();
+        var responseQueue = new Queue<string>();
+
+        var handler = new DelegateHttpMessageHandler(async (req, ct) =>
+        {
+            capturedBodies.Add(await req.Content!.ReadAsStringAsync(ct));
+            var json = responseQueue.Count > 0 ? responseQueue.Dequeue() : "{}";
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+        var client = new GitHubProjectsV2Client(httpClient, "ghp_token");
+        var config = new ProjectsV2Config { Enabled = true, ProjectNumber = 1 };
+
+        // Case 1: Missing projectId (projectV2 has id: null) -> returns after 1st GraphQL call
+        responseQueue.Enqueue("""{ "data": { "user": { "projectV2": { "id": null } } } }""");
+        await client.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", config);
+        capturedBodies.Should().HaveCount(1);
+
+        // Case 2: Valid projectId, but addProjectV2ItemById returns item: { id: null } -> stops after 2nd GraphQL call
+        capturedBodies.Clear();
+        responseQueue.Enqueue("""{ "data": { "user": { "projectV2": { "id": "PVT_1", "fields": { "nodes": [] } } } } }""");
+        responseQueue.Enqueue("""{ "data": { "addProjectV2ItemById": { "item": { "id": null } } } }""");
+        await client.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", config);
+        capturedBodies.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SyncNodeToProjectV2Async_WhenFieldsOrOptionsMissing_SkipsFieldUpdateMutations()
+    {
+        var capturedBodies = new List<string>();
+        var responseQueue = new Queue<string>();
+
+        var handler = new DelegateHttpMessageHandler(async (req, ct) =>
+        {
+            capturedBodies.Add(await req.Content!.ReadAsStringAsync(ct));
+            var json = responseQueue.Count > 0 ? responseQueue.Dequeue() : "{}";
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+        var client = new GitHubProjectsV2Client(httpClient, "ghp_token");
+        var config = new ProjectsV2Config { Enabled = true, ProjectNumber = 1 };
+
+        // Project has Status & Priority fields, but option "NonExistentColumn" and "P99" are not in options list
+        responseQueue.Enqueue("""
+        {
+          "data": {
+            "organization": {
+              "projectV2": {
+                "id": "PVT_proj1",
+                "fields": {
+                  "nodes": [
+                    {
+                      "id": "PVTSSF_status",
+                      "name": "Status",
+                      "options": [{ "id": "OPT_backlog", "name": "Backlog" }]
+                    },
+                    {
+                      "id": "PVTSSF_prio",
+                      "name": "Priority",
+                      "options": [{ "id": "OPT_p0", "name": "P0" }]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+        """);
+        responseQueue.Enqueue("""{ "data": { "addProjectV2ItemById": { "item": { "id": "PVTI_item1" } } } }""");
+
+        await client.SyncNodeToProjectV2Async("org", "nodeId", "NonExistentColumn", "P99", config);
+
+        // Only 2 calls made (query + addItem), 0 updateProjectV2ItemFieldValue calls made
+        capturedBodies.Should().HaveCount(2);
+        capturedBodies.Should().NotContain(b => b.Contains("updateProjectV2ItemFieldValue"));
     }
 
     private sealed class DelegateHttpMessageHandler(Func<System.Net.Http.HttpRequestMessage, CancellationToken, Task<System.Net.Http.HttpResponseMessage>> handler) : System.Net.Http.HttpMessageHandler
