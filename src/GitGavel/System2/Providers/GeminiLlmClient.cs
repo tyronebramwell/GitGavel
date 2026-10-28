@@ -78,7 +78,7 @@ public class GeminiLlmClient : ILlmClient
             httpRequest.Headers.Add("x-goog-api-key", _apiKey);
         }
 
-        var httpResponse = await _httpClient.SendAsync(httpRequest, ct);
+        using var httpResponse = await _httpClient.SendAsync(httpRequest, ct);
         sw.Stop();
 
         var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);

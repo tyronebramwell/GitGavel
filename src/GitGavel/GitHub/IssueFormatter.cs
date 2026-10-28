@@ -63,20 +63,20 @@ public static partial class IssueFormatter
 
         var sanitized = SanitizeContent(reference);
 
-        // Ensure markdown links only allow http:// or https:// schemas
+        // Disallow dangerous pseudo-protocols like javascript:, data:, vbscript: while allowing relative and anchor links
         return MarkdownLinkRegex().Replace(sanitized, match =>
         {
             var title = match.Groups[1].Value;
             var url = match.Groups[2].Value.Trim();
 
-            if (url.StartsWith("http://", StringComparison.OrdinalIgnoreCase) ||
-                url.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+            if (url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("vbscript:", StringComparison.OrdinalIgnoreCase))
             {
-                return $"[{title}]({url})";
+                return $"[{title}](#)";
             }
 
-            // Disallow javascript:, data:, vbscript:, etc.
-            return $"[{title}](#)";
+            return $"[{title}]({url})";
         });
     }
 

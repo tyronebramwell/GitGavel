@@ -122,16 +122,20 @@ public class GitHubTests
     }
 
     [Fact]
-    public void IssueFormatter_SanitizesReferences_NeutralizingJavascriptAndDataUris()
+    public void IssueFormatter_SanitizesReferences_NeutralizingJavascriptAndDataUris_WhileAllowingRelativeAndAnchorLinks()
     {
         var decision = CreateDecision("Vulnerability", "Security", "P2", 3.0, "Backlog", TriageStatus.AcceptedToBacklog);
         decision.Finding.References.Add("[Legitimate OWASP](https://owasp.org)");
+        decision.Finding.References.Add("[Documentation](./docs/setup.md)");
+        decision.Finding.References.Add("[Architecture Guide](#architecture)");
         decision.Finding.References.Add("[Malicious JS](javascript:alert(document.cookie))");
         decision.Finding.References.Add("[Data URI](data:text/html,<script>alert(1)</script>)");
 
         var body = IssueFormatter.FormatIssueBody(decision);
 
         body.Should().Contain("[Legitimate OWASP](https://owasp.org)");
+        body.Should().Contain("[Documentation](./docs/setup.md)");
+        body.Should().Contain("[Architecture Guide](#architecture)");
         body.Should().NotContain("javascript:");
         body.Should().NotContain("data:text/html");
         body.Should().Contain("[Malicious JS](#)");

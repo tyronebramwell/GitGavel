@@ -232,8 +232,9 @@ public class GitService : IGitService
         for (int i = 0; i < args.Length; i++)
         {
             char c = args[i];
+            bool isEscaped = i > 0 && args[i - 1] == '\\';
 
-            if ((c == '"' || c == '\'') && (!inQuotes || c == quoteChar))
+            if ((c == '"' || c == '\'') && (!inQuotes || c == quoteChar) && !isEscaped)
             {
                 inQuotes = !inQuotes;
                 quoteChar = inQuotes ? c : '\0';
@@ -248,6 +249,10 @@ public class GitService : IGitService
             }
             else
             {
+                if (isEscaped && (c == '"' || c == '\'') && sb.Length > 0 && sb[^1] == '\\')
+                {
+                    sb.Length--; // Remove escape backslash to preserve literal quote in argument
+                }
                 sb.Append(c);
             }
         }

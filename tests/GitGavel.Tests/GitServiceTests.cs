@@ -199,4 +199,16 @@ public class GitServiceTests
             "--name-only"
         ], options => options.WithStrictOrdering());
     }
+
+    [Fact]
+    public void GitService_TokenizeArguments_HandlesEscapedQuotes_CorrectlyPreservingNestedQuotes()
+    {
+        var tokens = GitService.TokenizeArguments("commit -m \"Fix \\\"bug\\\" in parser\" --author=\"Jane Doe <jane@example.com>\"");
+        tokens.Should().BeEquivalentTo([
+            "commit",
+            "-m",
+            "Fix \"bug\" in parser",
+            "--author=Jane Doe <jane@example.com>"
+        ], options => options.WithStrictOrdering());
+    }
 }
