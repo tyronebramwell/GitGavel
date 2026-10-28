@@ -1,77 +1,43 @@
 using System.Text;
+using GitGavel.Configuration;
 using GitGavel.Discovery;
 using GitGavel.System2.Abstractions;
-using GitGavel.System2.Models;
 
 namespace GitGavel.System2.Agents;
 
-public class SpecDriftAgent : ISubagent
+public class SpecDriftAgent(ILlmClient llmClient, string model = LlmModelDefaults.DefaultGeminiProModel)
+    : BaseLlmAgent(llmClient, LlmModelDefaults.ResolveSubagentModel(model, LlmModelDefaults.DefaultGeminiProModel))
 {
-    private readonly ILlmClient _llmClient;
-    private readonly string _model;
+    public override string Name => "SpecDriftAgent";
+    protected override string DefaultCategory => "SpecDrift";
+    protected override string SystemPrompt => "You are an expert software architect auditing specification compliance. Return strictly a JSON array of findings.";
 
-    public string Name => "SpecDriftAgent";
+    protected override bool ShouldSkipExecution(RepoContext context) => (context.SpecFiles?.Count ?? 0) == 0;
 
-    public SpecDriftAgent(ILlmClient llmClient, string model = "gemini-2.5-pro")
+    protected override Task<string> BuildPromptAsync(RepoContext context, CancellationToken ct)
     {
-        _llmClient = llmClient;
-        _model = model;
-    }
-
-    public async Task<SubagentResult> ExecuteAsync(RepoContext context, CancellationToken ct = default)
-    {
-        if (context.SpecFiles.Count == 0)
-        {
-            return new SubagentResult
-            {
-                AgentName = Name,
-                Findings = [],
-                DurationMs = 0
-            };
-        }
-
         var promptBuilder = new StringBuilder();
         promptBuilder.AppendLine("You are the Spec Drift Agent. Compare the repository specifications/documentation against the actual source code implementation.");
         promptBuilder.AppendLine("Identify any missing endpoints, divergent parameters, unimplemented requirements, or schema drift.");
         promptBuilder.AppendLine("IMPORTANT: Include documentation drift (e.g., README.md, SPECIFICATION.md, docs/) where documented CLI commands, options, features, architecture, or configurations are missing, outdated, or contradict the actual codebase.");
         promptBuilder.AppendLine("IMPORTANT: Do NOT report compliant implementations or positive alignments where no remediation is needed; return [] if all changes match the specification.");
-        if (context.IsPullRequestMode && context.ActivePullRequest != null)
-        {
-            promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
-            promptBuilder.AppendLine("ANTI-SCOPE-CREEP RULE: Only report Critical, High, or Medium severity specification contradictions introduced by this PR. Do NOT report Low-severity nits, test file details, or compliant changes; return [] if no substantive spec drift exists.");
-        }
+
+        AgentPromptBuilder.AppendPullRequestGuidance(
+            promptBuilder,
+            context,
+            "ANTI-SCOPE-CREEP RULE: Only report Critical, High, or Medium severity specification contradictions introduced by this PR. Do NOT report Low-severity nits, test file details, or compliant changes; return [] if no substantive spec drift exists.");
+
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Specification Documents:");
-        foreach (var spec in context.SpecFiles)
+        foreach (var spec in context.SpecFiles ?? [])
         {
             promptBuilder.AppendLine($"--- File: {spec.RelativePath} ---");
-            promptBuilder.AppendLine(spec.Content.Length > 32000 ? spec.Content[..32000] + "\n...(truncated)" : spec.Content);
+            promptBuilder.AppendLine(AgentPromptBuilder.Truncate(spec.Content, AgentPromptBuilder.MaxSpecLength));
         }
 
-        promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
-        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
-        foreach (var sum in summaries)
-        {
-            var symbolList = sum.Symbols.Count > 0
-                ? string.Join(", ", sum.Symbols.Select(s => $"{s.Kind} {s.Name}"))
-                : "None";
-            promptBuilder.AppendLine($"- File: `{sum.RelativePath}` | Symbols: {symbolList}");
-        }
-
-        promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Source Code Implementation:");
-        // Provide all scanned source files so the LLM has complete visibility of the implementation
-        foreach (var src in context.SourceFiles)
-        {
-            promptBuilder.AppendLine($"--- File: {src.RelativePath} ---");
-            if (!string.IsNullOrWhiteSpace(src.DiffPatch))
-            {
-                promptBuilder.AppendLine("PR Diff Patch:");
-                promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
-            }
-            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
-        }
+        var summaries = AgentPromptBuilder.ResolveAstSummaries(context);
+        AgentPromptBuilder.AppendSymbolMap(promptBuilder, summaries);
+        AgentPromptBuilder.AppendFilesSection(promptBuilder, context.SourceFiles ?? [], "### Source Code Implementation:");
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item. For 'references', provide 2-3 links in markdown format (e.g. [Title](url)) pointing to official framework/API docs, Stack Overflow topics, or research articles:");
@@ -95,35 +61,6 @@ public class SpecDriftAgent : ISubagent
         ]
         """);
 
-        try
-        {
-            var response = await _llmClient.GenerateAsync(new LlmRequest
-            {
-                Prompt = promptBuilder.ToString(),
-                SystemPrompt = "You are an expert software architect auditing specification compliance. Return strictly a JSON array of findings.",
-                Model = _model,
-                ExpectJson = true
-            }, ct);
-
-            var findings = FindingParser.ParseFindings(response.Content, Name, "SpecDrift");
-
-            return new SubagentResult
-            {
-                AgentName = Name,
-                Findings = findings,
-                PromptTokens = response.PromptTokens,
-                CompletionTokens = response.CompletionTokens,
-                DurationMs = response.DurationMs
-            };
-        }
-        catch (Exception ex)
-        {
-            return new SubagentResult
-            {
-                AgentName = Name,
-                IsSuccess = false,
-                ErrorMessage = ex.Message
-            };
-        }
+        return Task.FromResult(promptBuilder.ToString());
     }
 }

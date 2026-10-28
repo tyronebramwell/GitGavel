@@ -4,6 +4,7 @@ public record LlmRequest
 {
     public required string Prompt { get; init; }
     public string? SystemPrompt { get; init; }
+    public string? AgentName { get; init; }
     public string Model { get; init; } = "gemini-2.5-pro";
     public double Temperature { get; init; } = 0.2;
     public bool ExpectJson { get; init; } = true;

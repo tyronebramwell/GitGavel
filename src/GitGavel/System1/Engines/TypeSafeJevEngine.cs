@@ -32,176 +32,149 @@ public class TypeSafeJevEngine : ITriageEngine
         CancellationToken ct = default)
     {
         var gatingConfig = config.Triage.SubagentGating;
-        var decisions = new List<SubagentGatingDecision>();
+        var signals = GatingSignals.FromRepoContext(context);
 
-        // 1. Check if gating is disabled or bypassed in full repo mode
-        if (!gatingConfig.Enabled || (gatingConfig.BypassInFullRepoMode && !context.IsPullRequestMode))
+        var bypassResult = TriageEngineHelper.TryEvaluateGlobalGatingBypass(signals, candidateAgentNames, gatingConfig);
+        if (bypassResult != null)
         {
-            foreach (var name in candidateAgentNames)
-            {
-                decisions.Add(new SubagentGatingDecision(
-                    name,
-                    ShouldRun: true,
-                    Confidence: 1.0,
-                    Reason: !gatingConfig.Enabled ? "Subagent gating disabled in configuration." : "Subagent gating bypassed in full repository audit mode.",
-                    IsDeterministicOverride: true));
-            }
-            return new SubagentGatingResult(decisions, EstimatedTokensSaved: 0);
+            return bypassResult;
         }
 
-        // 2. Identify deterministic override triggers
-        var hasSpecChanges = context.IsPullRequestMode
-            ? context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch))
-            : context.SpecFiles.Count > 0 || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
-        var hasSarif = context.SarifFindings.Count > 0;
-        var hasComplexity = context.AstSummaries.Any(a => a.TotalComplexityScore >= 15 || a.IsComplexityHotspot);
-
+        var decisions = new List<SubagentGatingDecision>();
         var pendingQuestions = new Dictionary<string, Question>();
         var agentToQuestionKey = new Dictionary<string, string>();
 
         foreach (var agentName in candidateAgentNames)
         {
-            if (agentName == "SecurityAuditor" && gatingConfig.AlwaysRunSecurityOnSarifAlerts && hasSarif)
+            var overrideDecision = TriageEngineHelper.TryEvaluateDeterministicOverride(agentName, signals, gatingConfig);
+            if (overrideDecision != null)
+            {
+                decisions.Add(overrideDecision);
+                continue;
+            }
+
+            if (TryBuildGatingQuestion(agentName, out var questionKey, out var question))
+            {
+                pendingQuestions[questionKey] = question;
+                agentToQuestionKey[agentName] = questionKey;
+            }
+            else
             {
                 decisions.Add(new SubagentGatingDecision(
                     agentName,
                     ShouldRun: true,
-                    Confidence: 1.0,
-                    Reason: $"Deterministic override: {context.SarifFindings.Count} SARIF static alerts loaded.",
-                    IsDeterministicOverride: true));
-                continue;
+                    Confidence: 0.80,
+                    Reason: "Standard subagent dispatch."));
             }
+        }
 
-            if (agentName == "SpecDriftAgent" && gatingConfig.AlwaysRunSpecDriftOnSpecChanges && hasSpecChanges)
+        if (pendingQuestions.Count > 0)
+        {
+            try
             {
-                decisions.Add(new SubagentGatingDecision(
-                    agentName,
-                    ShouldRun: true,
-                    Confidence: 1.0,
-                    Reason: context.IsPullRequestMode
-                        ? "Deterministic override: specification documents modified in diff."
-                        : "Deterministic override: specification documents present in repository.",
-                    IsDeterministicOverride: true));
-                continue;
+                var metadataState = BuildGatingMetadataState(signals);
+                var response = await _jevClient.SystemOneAsync(metadataState, pendingQuestions, cancellationToken: ct);
+
+                foreach (var (agentName, qKey) in agentToQuestionKey)
+                {
+                    var noul = response.Noul(qKey);
+                    var prob = noul?.Noul ?? 0.50;
+                    var shouldRun = prob >= gatingConfig.MinConfidence;
+                    var reason = shouldRun
+                        ? $"Activated by Jev Noul (P={prob:P0} >= {gatingConfig.MinConfidence:P0})"
+                        : $"Skipped by Jev Noul (P={prob:P0} < {gatingConfig.MinConfidence:P0})";
+
+                    decisions.Add(new SubagentGatingDecision(agentName, shouldRun, prob, reason));
+                }
             }
-
-            if (agentName == "RefactoringAgent" && hasComplexity)
+            catch (Exception ex)
             {
-                decisions.Add(new SubagentGatingDecision(
-                    agentName,
-                    ShouldRun: true,
-                    Confidence: 1.0,
-                    Reason: "Deterministic override: Roslyn cyclomatic complexity >= 15 detected.",
-                    IsDeterministicOverride: true));
-                continue;
-            }
-
-            // Otherwise, prepare Jev Noul question
-            switch (agentName)
-            {
-                case "SpecDriftAgent":
-                    pendingQuestions["run_spec_drift"] = Question.Noul(
-                        "Do the changes modify specifications, API documentation, OpenAPI schemas, or public interface contracts?",
-                        "Changes modify documentation, OpenAPI schemas, public controllers, or interface contracts.",
-                        "Changes are purely internal refactoring, tests, or bug fixes with no spec or documentation impact."
-                    );
-                    agentToQuestionKey[agentName] = "run_spec_drift";
-                    break;
-
-                case "SecurityAuditor":
-                    pendingQuestions["run_security"] = Question.Noul(
-                        "Do the changes touch security-critical code, authentication, authorization, cryptography, data access, network boundaries, or third-party dependencies?",
-                        "Changes touch authentication, secrets, crypto, database queries, network endpoints, or dependencies.",
-                        "Changes are cosmetic, UI, documentation, or trivial formatting."
-                    );
-                    agentToQuestionKey[agentName] = "run_security";
-                    break;
-
-                case "ReliabilityAgent":
-                    pendingQuestions["run_reliability"] = Question.Noul(
-                        "Do the changes modify or introduce asynchronous execution, concurrency, task scheduling, exception handling, resource disposal, or performance-critical loops?",
-                        "Changes affect async/await, concurrency, error handling, disposable resources, or collections in loops.",
-                        "Changes do not modify execution semantics, error handling, or performance-sensitive logic."
-                    );
-                    agentToQuestionKey[agentName] = "run_reliability";
-                    break;
-
-                case "RefactoringAgent":
-                    pendingQuestions["run_refactoring"] = Question.Noul(
-                        "Do the modified files exhibit significant structural complexity churn, high cyclomatic complexity, or large method modifications?",
-                        "Changes introduce large methods, structural churn, deep nesting, or architectural complexity.",
-                        "Changes are small, localized, or low-churn adjustments."
-                    );
-                    agentToQuestionKey[agentName] = "run_refactoring";
-                    break;
-
-                case "TestSentinelAgent":
-                    pendingQuestions["run_tests"] = Question.Noul(
-                        "Were new production features or branching logic introduced that require automated unit, integration, or E2E test verification?",
-                        "New business logic, classes, methods, or conditional branches were added without corresponding tests.",
-                        "Only documentation, build files, or existing tests were modified, or change is a trivial cosmetic fix."
-                    );
-                    agentToQuestionKey[agentName] = "run_tests";
-                    break;
-
-                default:
+                foreach (var (agentName, _) in agentToQuestionKey)
+                {
                     decisions.Add(new SubagentGatingDecision(
                         agentName,
                         ShouldRun: true,
-                        Confidence: 0.80,
-                        Reason: "Standard subagent dispatch."));
-                    break;
-            }
-        }
-
-        // 3. Dispatch Jev SystemOne query if any agents need probabilistic gating
-        if (pendingQuestions.Count > 0)
-        {
-            var changedFilesList = context.ActivePullRequest?.ChangedFiles?.Select(f => (object)new { f.FilePath, f.Additions, f.Deletions }).ToList() ??
-                                   context.SourceFiles.Where(f => !string.IsNullOrEmpty(f.DiffPatch)).Select(f => (object)new { FilePath = f.RelativePath, Additions = f.LineCount, Deletions = 0 }).ToList();
-
-            if (changedFilesList.Count == 0 && context.SourceFiles.Count > 0)
-            {
-                changedFilesList = context.SourceFiles.Take(25).Select(f => (object)new { FilePath = f.RelativePath, Additions = f.LineCount, Deletions = 0 }).ToList();
-            }
-
-            var metadataState = JsonContent.From(new
-            {
-                context = new
-                {
-                    isPullRequestMode = context.IsPullRequestMode,
-                    prTitle = context.ActivePullRequest?.Title,
-                    prDescription = context.ActivePullRequest?.Body != null && context.ActivePullRequest.Body.Length > 500
-                        ? context.ActivePullRequest.Body[..500]
-                        : context.ActivePullRequest?.Body,
-                    changedFiles = changedFilesList,
-                    specFilesCount = context.SpecFiles.Count,
-                    sourceFilesCount = context.SourceFiles.Count,
-                    testFilesCount = context.TestFiles.Count,
-                    sarifFindingsCount = context.SarifFindings.Count,
-                    maxCyclomaticComplexity = context.AstSummaries.Count > 0 ? context.AstSummaries.Max(a => a.TotalComplexityScore) : 0
+                        Confidence: 1.0,
+                        Reason: $"Jev gating fallback (fail-open): {ex.Message}"));
                 }
-            });
-
-            var response = await _jevClient.SystemOneAsync(metadataState, pendingQuestions, cancellationToken: ct);
-
-            foreach (var (agentName, qKey) in agentToQuestionKey)
-            {
-                var noul = response.Noul(qKey);
-                var prob = noul?.Noul ?? 0.50;
-                var shouldRun = prob >= gatingConfig.MinConfidence;
-                var reason = shouldRun
-                    ? $"Activated by Jev Noul (P={prob:P0} >= {gatingConfig.MinConfidence:P0})"
-                    : $"Skipped by Jev Noul (P={prob:P0} < {gatingConfig.MinConfidence:P0})";
-
-                decisions.Add(new SubagentGatingDecision(agentName, shouldRun, prob, reason));
             }
         }
 
-        var skipped = decisions.Count(d => !d.ShouldRun);
-        var tokensSaved = skipped * 5000L;
-        return new SubagentGatingResult(decisions, tokensSaved);
+        return TriageEngineHelper.BuildGatingResult(decisions);
     }
+
+    private static bool TryBuildGatingQuestion(string agentName, out string questionKey, out Question question)
+    {
+        switch (agentName)
+        {
+            case "SpecDriftAgent":
+                questionKey = "run_spec_drift";
+                question = Question.Noul(
+                    "Do the changes modify specifications, API documentation, OpenAPI schemas, or public interface contracts?",
+                    "Changes modify documentation, OpenAPI schemas, public controllers, or interface contracts.",
+                    "Changes are purely internal refactoring, tests, or bug fixes with no spec or documentation impact."
+                );
+                return true;
+
+            case "SecurityAuditor":
+                questionKey = "run_security";
+                question = Question.Noul(
+                    "Do the changes touch security-critical code, authentication, authorization, cryptography, data access, network boundaries, or third-party dependencies?",
+                    "Changes touch authentication, secrets, crypto, database queries, network endpoints, or dependencies.",
+                    "Changes are cosmetic, UI, documentation, or trivial formatting."
+                );
+                return true;
+
+            case "ReliabilityAgent":
+                questionKey = "run_reliability";
+                question = Question.Noul(
+                    "Do the changes modify or introduce asynchronous execution, concurrency, task scheduling, exception handling, resource disposal, or performance-critical loops?",
+                    "Changes affect async/await, concurrency, error handling, disposable resources, or collections in loops.",
+                    "Changes do not modify execution semantics, error handling, or performance-sensitive logic."
+                );
+                return true;
+
+            case "RefactoringAgent":
+                questionKey = "run_refactoring";
+                question = Question.Noul(
+                    "Do the modified files exhibit significant structural complexity churn, high cyclomatic complexity, or large method modifications?",
+                    "Changes introduce large methods, structural churn, deep nesting, or architectural complexity.",
+                    "Changes are small, localized, or low-churn adjustments."
+                );
+                return true;
+
+            case "TestSentinelAgent":
+                questionKey = "run_tests";
+                question = Question.Noul(
+                    "Were new production features or branching logic introduced that require automated unit, integration, or E2E test verification?",
+                    "New business logic, classes, methods, or conditional branches were added without corresponding tests.",
+                    "Only documentation, build files, or existing tests were modified, or change is a trivial cosmetic fix."
+                );
+                return true;
+
+            default:
+                questionKey = string.Empty;
+                question = null!;
+                return false;
+        }
+    }
+
+    private static JsonContent BuildGatingMetadataState(GatingSignals signals) =>
+        JsonContent.From(new
+        {
+            context = new
+            {
+                isPullRequestMode = signals.IsPullRequestMode,
+                prTitle = signals.PrTitle,
+                prDescription = signals.PrDescription,
+                changedFiles = signals.ChangedFilesSummary,
+                specFilesCount = signals.SpecFilesCount,
+                sourceFilesCount = signals.SourceFilesCount,
+                testFilesCount = signals.TestFilesCount,
+                sarifFindingsCount = signals.SarifFindingsCount,
+                maxCyclomaticComplexity = signals.MaxCyclomaticComplexity
+            }
+        });
 
     public async Task<TriageDecision> EvaluateFindingAsync(
         FindingCandidate finding,
@@ -211,98 +184,163 @@ public class TypeSafeJevEngine : ITriageEngine
     {
         var thresholds = config.Triage.Jev.Thresholds;
 
-        // 1. Deduplication with Jev Noul (if enabled and existing issues are present)
-        int? duplicateIssueNum = null;
-        double maxDuplicateProb = 0.0;
+        // 1. Deduplication check against existing issues
+        var (definiteDuplicateDecision, maxDuplicateProb, uncertainMatchIssueNum) =
+            await TryDeduplicateFindingAsync(finding, existingIssues, config.Triage.Jev.DedupeWithNoul, thresholds, ct);
+
+        if (definiteDuplicateDecision != null)
+        {
+            return definiteDuplicateDecision;
+        }
+
+        // 2. Calibrated urgency score and destination choice
+        var (calibratedScore, priorityLabel, selectedChoice, choiceConfidence) =
+            await EvaluatePriorityAndChoiceAsync(finding, ct);
+
+        // 3. Handle uncertain duplicate matches
+        if (uncertainMatchIssueNum.HasValue && selectedChoice != "Discard")
+        {
+            return ResolveUncertainDuplicateDecision(
+                finding,
+                uncertainMatchIssueNum.Value,
+                maxDuplicateProb,
+                calibratedScore,
+                priorityLabel,
+                choiceConfidence,
+                thresholds);
+        }
+
+        // 4. Apply confidence threshold routing
+        if (selectedChoice == "Backlog" && choiceConfidence < thresholds.HumanReviewConfidence)
+        {
+            selectedChoice = "NeedsHumanReview";
+        }
+
+        var status = selectedChoice switch
+        {
+            "Backlog" => TriageStatus.AcceptedToBacklog,
+            "NeedsHumanReview" => TriageStatus.RoutedToHumanReview,
+            _ => TriageStatus.DiscardedNoise
+        };
+
+        return new TriageDecision
+        {
+            Finding = finding,
+            IsDuplicate = false,
+            DuplicateOfIssueNumber = null,
+            DuplicateProbability = maxDuplicateProb,
+            JevScore = calibratedScore,
+            PriorityLabel = priorityLabel,
+            TargetColumn = selectedChoice,
+            Confidence = choiceConfidence,
+            Status = status,
+            Reason = $"Jev Choice '{selectedChoice}' with confidence {choiceConfidence:P0} (Score: {calibratedScore:F1}/5.0)"
+        };
+    }
+
+    private async Task<(TriageDecision? DefiniteDuplicate, double MaxDuplicateProb, int? UncertainMatchIssueNum)> TryDeduplicateFindingAsync(
+        FindingCandidate finding,
+        IReadOnlyList<ExistingIssue> existingIssues,
+        bool dedupeEnabled,
+        JevThresholds thresholds,
+        CancellationToken ct)
+    {
+        var maxDuplicateProb = 0.0;
         int? uncertainMatchIssueNum = null;
 
-        if (config.Triage.Jev.DedupeWithNoul && existingIssues.Count > 0)
+        if (!dedupeEnabled || existingIssues.Count == 0)
         {
-            foreach (var issue in existingIssues)
+            return (null, maxDuplicateProb, uncertainMatchIssueNum);
+        }
+
+        foreach (var issue in existingIssues)
+        {
+            var issueFingerprint = issue.GetEffectiveFingerprint();
+            if (!string.IsNullOrWhiteSpace(issueFingerprint) &&
+                string.Equals(issueFingerprint, finding.Fingerprint, StringComparison.OrdinalIgnoreCase))
             {
-                var metadata = GitGavel.GitHub.IssueFormatter.ParseMetadata(issue.Body);
-                if (metadata != null && string.Equals(metadata.Fingerprint, finding.Fingerprint, StringComparison.OrdinalIgnoreCase))
+                return (new TriageDecision
                 {
-                    return new TriageDecision
-                    {
-                        Finding = finding,
-                        IsDuplicate = true,
-                        DuplicateOfIssueNumber = issue.Number,
-                        DuplicateProbability = 1.0,
-                        JevScore = 1.0,
-                        PriorityLabel = "P3",
-                        TargetColumn = "Discard",
-                        Confidence = 1.0,
-                        Status = TriageStatus.SuppressedDuplicate,
-                        Reason = $"Exact fingerprint duplicate of existing issue #{issue.Number}"
-                    };
+                    Finding = finding,
+                    IsDuplicate = true,
+                    DuplicateOfIssueNumber = issue.Number,
+                    DuplicateProbability = 1.0,
+                    JevScore = 1.0,
+                    PriorityLabel = "P3",
+                    TargetColumn = "Discard",
+                    Confidence = 1.0,
+                    Status = TriageStatus.SuppressedDuplicate,
+                    Reason = $"Exact fingerprint duplicate of existing issue #{issue.Number}"
+                }, 1.0, null);
+            }
+
+            var dedupeState = JsonContent.From(new
+            {
+                candidate = new
+                {
+                    title = finding.Title,
+                    summary = finding.Summary,
+                    filePath = finding.FilePath,
+                    startLine = finding.StartLine,
+                    category = finding.Category
+                },
+                existingIssue = new
+                {
+                    number = issue.Number,
+                    title = issue.Title,
+                    body = issue.Body.Length > 1000 ? issue.Body[..1000] : issue.Body
                 }
+            });
 
-                var dedupeState = JsonContent.From(new
-                {
-                    candidate = new
+            var dedupeQuestions = new Dictionary<string, Question>
+            {
+                ["is_duplicate"] = Question.Noul(
+                    "Does candidate finding represent the same core problem or refactoring target as existing issue?",
+                    JsonContent.From(new NoulCriteria
                     {
-                        title = finding.Title,
-                        summary = finding.Summary,
-                        filePath = finding.FilePath,
-                        startLine = finding.StartLine,
-                        category = finding.Category
-                    },
-                    existingIssue = new
-                    {
-                        number = issue.Number,
-                        title = issue.Title,
-                        body = issue.Body.Length > 1000 ? issue.Body[..1000] : issue.Body
-                    }
-                });
+                        True = "The candidate finding and existing issue describe the same bug, vulnerability, or refactoring target in the same code area.",
+                        False = "The candidate finding describes a distinct, novel, or separate issue."
+                    })
+                )
+            };
 
-                var dedupeQuestions = new Dictionary<string, Question>
+            var dedupeResp = await _jevClient.SystemOneAsync(dedupeState, dedupeQuestions, cancellationToken: ct);
+            var prob = dedupeResp.Noul("is_duplicate")?.Noul ?? 0.0;
+
+            if (prob >= thresholds.AutoBacklogConfidence)
+            {
+                return (new TriageDecision
                 {
-                    ["is_duplicate"] = Question.Noul(
-                        "Does candidate finding represent the same core problem or refactoring target as existing issue?",
-                        JsonContent.From(new NoulCriteria
-                        {
-                            True = "The candidate finding and existing issue describe the same bug, vulnerability, or refactoring target in the same code area.",
-                            False = "The candidate finding describes a distinct, novel, or separate issue."
-                        })
-                    )
-                };
+                    Finding = finding,
+                    IsDuplicate = true,
+                    DuplicateOfIssueNumber = issue.Number,
+                    DuplicateProbability = prob,
+                    JevScore = 1.0,
+                    PriorityLabel = "P3",
+                    TargetColumn = "Discard",
+                    Confidence = prob,
+                    Status = TriageStatus.SuppressedDuplicate,
+                    Reason = $"Duplicate of existing issue #{issue.Number} (P={prob:P0} >= {thresholds.AutoBacklogConfidence:P0})"
+                }, prob, null);
+            }
 
-                var dedupeResp = await _jevClient.SystemOneAsync(dedupeState, dedupeQuestions, cancellationToken: ct);
-                var noul = dedupeResp.Noul("is_duplicate");
-                var prob = noul?.Noul ?? 0.0;
-
-                if (prob >= thresholds.AutoBacklogConfidence) // >= 0.85 -> Definite Duplicate
+            if (prob > maxDuplicateProb)
+            {
+                maxDuplicateProb = prob;
+                if (prob >= thresholds.HumanReviewConfidence && prob < thresholds.AutoBacklogConfidence)
                 {
-                    duplicateIssueNum = issue.Number;
-                    return new TriageDecision
-                    {
-                        Finding = finding,
-                        IsDuplicate = true,
-                        DuplicateOfIssueNumber = issue.Number,
-                        DuplicateProbability = prob,
-                        JevScore = 1.0,
-                        PriorityLabel = "P3",
-                        TargetColumn = "Discard",
-                        Confidence = prob,
-                        Status = TriageStatus.SuppressedDuplicate,
-                        Reason = $"Duplicate of existing issue #{issue.Number} (P={prob:P0} >= {thresholds.AutoBacklogConfidence:P0})"
-                    };
-                }
-
-                if (prob > maxDuplicateProb)
-                {
-                    maxDuplicateProb = prob;
-                    if (prob >= thresholds.HumanReviewConfidence && prob < thresholds.AutoBacklogConfidence)
-                    {
-                        // Between HumanReviewConfidence (0.50/0.60) and AutoBacklogConfidence (0.85) -> Borderline / Uncertain match
-                        uncertainMatchIssueNum = issue.Number;
-                    }
+                    uncertainMatchIssueNum = issue.Number;
                 }
             }
         }
 
-        // 2. Score and Column Routing via Jev Score and Choice
+        return (null, maxDuplicateProb, uncertainMatchIssueNum);
+    }
+
+    private async Task<(double CalibratedScore, string PriorityLabel, string SelectedChoice, double ChoiceConfidence)> EvaluatePriorityAndChoiceAsync(
+        FindingCandidate finding,
+        CancellationToken ct)
+    {
         var evalState = JsonContent.From(new
         {
             candidate = new
@@ -344,85 +382,53 @@ public class TypeSafeJevEngine : ITriageEngine
         };
 
         var evalResp = await _jevClient.SystemOneAsync(evalState, evalQuestions, cancellationToken: ct);
-
-        var scoreAnswer = evalResp.Score("priority_score");
-        var choiceAnswer = evalResp.Choice("route_choice");
-
-        var rawScore = scoreAnswer?.Score ?? 3.0;
+        var rawScore = evalResp.Score("priority_score")?.Score ?? 3.0;
         var calibratedScore = Math.Clamp(Math.Round(rawScore, 1), 1.0, 5.0);
-        var selectedChoice = choiceAnswer?.Choice ?? "Backlog";
-        var choiceConfidence = choiceAnswer?.Confidence ?? 0.85;
+        var selectedChoice = evalResp.Choice("route_choice")?.Choice ?? "Backlog";
+        var choiceConfidence = evalResp.Choice("route_choice")?.Confidence ?? 0.85;
+        var priorityLabel = TriageEngineHelper.MapScoreToPriority(calibratedScore);
 
-        // Map calibrated score to Priority
-        var priorityLabel = calibratedScore switch
+        return (calibratedScore, priorityLabel, selectedChoice, choiceConfidence);
+    }
+
+    private static TriageDecision ResolveUncertainDuplicateDecision(
+        FindingCandidate finding,
+        int uncertainMatchIssueNum,
+        double maxDuplicateProb,
+        double calibratedScore,
+        string priorityLabel,
+        double choiceConfidence,
+        JevThresholds thresholds)
+    {
+        if (priorityLabel == "P3")
         {
-            >= 4.5 => "P0",
-            >= 3.5 => "P1",
-            >= 2.5 => "P2",
-            _ => "P3"
-        };
-
-        // If deduplication found an uncertain match (HumanReviewConfidence <= P < AutoBacklogConfidence):
-        // Suppress P3 duplicates directly; route P0-P2 borderline matches to human review.
-        if (uncertainMatchIssueNum.HasValue && selectedChoice != "Discard")
-        {
-            if (priorityLabel == "P3")
-            {
-                return new TriageDecision
-                {
-                    Finding = finding,
-                    IsDuplicate = true,
-                    DuplicateOfIssueNumber = uncertainMatchIssueNum,
-                    DuplicateProbability = maxDuplicateProb,
-                    JevScore = calibratedScore,
-                    PriorityLabel = priorityLabel,
-                    TargetColumn = "Discard",
-                    Confidence = maxDuplicateProb,
-                    Status = TriageStatus.SuppressedDuplicate,
-                    Reason = $"Suppressed P3 duplicate of existing issue #{uncertainMatchIssueNum} (P={maxDuplicateProb:P0} >= {thresholds.HumanReviewConfidence:P0})"
-                };
-            }
-
             return new TriageDecision
             {
                 Finding = finding,
-                IsDuplicate = false,
+                IsDuplicate = true,
                 DuplicateOfIssueNumber = uncertainMatchIssueNum,
                 DuplicateProbability = maxDuplicateProb,
                 JevScore = calibratedScore,
                 PriorityLabel = priorityLabel,
-                TargetColumn = "NeedsHumanReview",
-                Confidence = choiceConfidence,
-                Status = TriageStatus.RoutedToHumanReview,
-                Reason = $"Potential duplicate of issue #{uncertainMatchIssueNum} (P={maxDuplicateProb:P0}). Routed for maintainer review."
+                TargetColumn = "Discard",
+                Confidence = maxDuplicateProb,
+                Status = TriageStatus.SuppressedDuplicate,
+                Reason = $"Suppressed P3 duplicate of existing issue #{uncertainMatchIssueNum} (P={maxDuplicateProb:P0} >= {thresholds.HumanReviewConfidence:P0})"
             };
         }
-
-        // Apply confidence threshold routing
-        if (selectedChoice == "Backlog" && choiceConfidence < thresholds.HumanReviewConfidence)
-        {
-            selectedChoice = "NeedsHumanReview";
-        }
-
-        var status = selectedChoice switch
-        {
-            "Backlog" => TriageStatus.AcceptedToBacklog,
-            "NeedsHumanReview" => TriageStatus.RoutedToHumanReview,
-            _ => TriageStatus.DiscardedNoise
-        };
 
         return new TriageDecision
         {
             Finding = finding,
             IsDuplicate = false,
-            DuplicateOfIssueNumber = null,
+            DuplicateOfIssueNumber = uncertainMatchIssueNum,
             DuplicateProbability = maxDuplicateProb,
             JevScore = calibratedScore,
             PriorityLabel = priorityLabel,
-            TargetColumn = selectedChoice,
+            TargetColumn = "NeedsHumanReview",
             Confidence = choiceConfidence,
-            Status = status,
-            Reason = $"Jev Choice '{selectedChoice}' with confidence {choiceConfidence:P0} (Score: {calibratedScore:F1}/5.0)"
+            Status = TriageStatus.RoutedToHumanReview,
+            Reason = $"Potential duplicate of issue #{uncertainMatchIssueNum} (P={maxDuplicateProb:P0}). Routed for maintainer review."
         };
     }
 
@@ -440,37 +446,7 @@ public class TypeSafeJevEngine : ITriageEngine
             decisions.Add(decision);
         }
 
-        // Enforce maxIssuesPerRun safety cap on P3 issues (P0, P1, and P2 do not count toward the cap)
-        var cappedCandidates = decisions
-            .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
-                        d.PriorityLabel == "P3")
-            .ToList();
-
-        if (cappedCandidates.Count > config.Triage.MaxIssuesPerRun)
-        {
-            var topAllowed = cappedCandidates
-                .OrderByDescending(d => d.JevScore)
-                .ThenByDescending(d => d.Confidence)
-                .Take(config.Triage.MaxIssuesPerRun)
-                .ToHashSet();
-
-            for (var i = 0; i < decisions.Count; i++)
-            {
-                var d = decisions[i];
-                if (d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
-                    d.PriorityLabel == "P3" &&
-                    !topAllowed.Contains(d))
-                {
-                    decisions[i] = d with
-                    {
-                        Status = TriageStatus.DiscardedNoise,
-                        TargetColumn = "Discard",
-                        Reason = $"Deferred: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached for P3 findings (P0–P2 exempt)."
-                    };
-                }
-            }
-        }
-
+        TriageEngineHelper.EnforceMaxIssuesPerRunCap(decisions, config.Triage.MaxIssuesPerRun);
         return decisions;
     }
 
@@ -627,14 +603,7 @@ public class TypeSafeJevEngine : ITriageEngine
             var calibratedScore = Math.Clamp(Math.Round(rawScore, 1), 1.0, 5.0);
             var choiceStr = evalResp.Choice("pr_route_choice")?.Choice ?? "PostInlineReview";
             var confidence = evalResp.Choice("pr_route_choice")?.Confidence ?? 0.88;
-
-            var prio = calibratedScore switch
-            {
-                >= 4.5 => "P0",
-                >= 3.5 => "P1",
-                >= 2.5 => "P2",
-                _ => "P3"
-            };
+            var prio = TriageEngineHelper.MapScoreToPriority(calibratedScore);
 
             var action = prio == "P3"
                 ? PrCommentAction.Discard
@@ -660,27 +629,7 @@ public class TypeSafeJevEngine : ITriageEngine
             });
         }
 
-        // Enforce MaxInlineCommentsPerPr cap across the PR lifecycle
-        var maxInline = config.Github.PullRequests.MaxInlineCommentsPerPr;
-        var remainingInlineBudget = Math.Max(0, maxInline - existingComments.Count);
-        var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
-        if (maxInline > 0 && inlineAccepted.Count > remainingInlineBudget)
-        {
-            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(remainingInlineBudget).ToHashSet();
-            for (var i = 0; i < decisions.Count; i++)
-            {
-                var d = decisions[i];
-                if (d.Action == PrCommentAction.PostInlineReview && !topInline.Contains(d))
-                {
-                    decisions[i] = d with
-                    {
-                        Action = PrCommentAction.SummaryCommentOnly,
-                        Reason = $"Moved to PR summary: maxInlineCommentsPerPr cap ({maxInline}) reached."
-                    };
-                }
-            }
-        }
-
+        TriageEngineHelper.EnforceMaxInlineCommentsCap(decisions, config.Github.PullRequests.MaxInlineCommentsPerPr, existingComments.Count);
         return decisions;
     }
 

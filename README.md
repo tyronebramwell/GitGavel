@@ -223,7 +223,7 @@ subagents:
     model: "gemini-2.5-pro"
     sarifReports: ["reports/semgrep.sarif"]
   reliability:
-    enabled: true                     # Phase 8: Reliability & Performance Subagent
+    enabled: true                     # Reliability & Performance Subagent
     provider: "gemini"
     model: "gemini-3.1-pro-preview"
   refactoring:

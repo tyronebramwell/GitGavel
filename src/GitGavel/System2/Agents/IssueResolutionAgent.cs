@@ -1,4 +1,5 @@
 using System.Text;
+using GitGavel.Configuration;
 using GitGavel.Discovery;
 using GitGavel.System1.Models;
 using GitGavel.System2.Abstractions;
@@ -13,10 +14,10 @@ public class IssueResolutionAgent
 
     public string Name => "IssueResolutionAuditor";
 
-    public IssueResolutionAgent(ILlmClient llmClient, string model = "gemini-2.5-flash")
+    public IssueResolutionAgent(ILlmClient llmClient, string model = LlmModelDefaults.DefaultGeminiFlashModel)
     {
         _llmClient = llmClient;
-        _model = model;
+        _model = LlmModelDefaults.ResolveSubagentModel(model, LlmModelDefaults.DefaultGeminiFlashModel);
     }
 
     public async Task<IssueResolutionAgentResult> EvaluateOpenIssuesAsync(
@@ -47,8 +48,7 @@ public class IssueResolutionAgent
         foreach (var issue in activeIssues)
         {
             promptBuilder.AppendLine($"--- Issue #{issue.Number}: {issue.Title} ---");
-            var body = issue.Body ?? "";
-            promptBuilder.AppendLine(body.Length > 1500 ? body[..1500] + "\n...(truncated)" : body);
+            promptBuilder.AppendLine(AgentPromptBuilder.Truncate(issue.Body, AgentPromptBuilder.MaxIssueBodyLength));
         }
 
         promptBuilder.AppendLine();
@@ -66,18 +66,8 @@ public class IssueResolutionAgent
             }
         }
 
-        promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Repository Architecture & Symbol Map:");
-        var summaries = context.AstSummaries != null && context.AstSummaries.Count > 0
-            ? context.AstSummaries
-            : AstAnalyzer.AnalyzeAll(context.SourceFiles ?? []);
-        foreach (var sum in summaries)
-        {
-            var symbolList = sum.Symbols.Count > 0
-                ? string.Join(", ", sum.Symbols.Select(s => $"{s.Kind} {s.Name}"))
-                : "None";
-            promptBuilder.AppendLine($"- File: `{sum.RelativePath}` | Symbols: {symbolList}");
-        }
+        var summaries = AgentPromptBuilder.ResolveAstSummaries(context);
+        AgentPromptBuilder.AppendSymbolMap(promptBuilder, summaries);
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Current Repository Files Snapshot:");
@@ -102,6 +92,7 @@ public class IssueResolutionAgent
         {
             var response = await _llmClient.GenerateAsync(new LlmRequest
             {
+                AgentName = Name,
                 Prompt = promptBuilder.ToString(),
                 SystemPrompt = "You are a senior maintainer verifying whether open GitHub issues have been completed in recent commits. Return strictly a JSON array of resolution assessments.",
                 Model = _model,
@@ -110,7 +101,6 @@ public class IssueResolutionAgent
 
             var candidates = FindingParser.ParseIssueResolutions(response.Content);
 
-            // Filter to resolved candidates and enrich commit summaries from context.RecentCommits
             var enriched = candidates
                 .Where(c => c.IsResolved)
                 .Select(c => EnrichCommitSummaries(c, context))

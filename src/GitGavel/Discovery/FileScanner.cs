@@ -7,6 +7,9 @@ namespace GitGavel.Discovery;
 
 public class FileScanner
 {
+    private const long DefaultMaxFileSizeBytes = 1024 * 1024; // 1 MB
+    private const int MaxConcurrentFileReads = 16;
+
     private readonly IGitService _gitService;
 
     public FileScanner(IGitService? gitService = null)
@@ -14,7 +17,11 @@ public class FileScanner
         _gitService = gitService ?? new GitService();
     }
 
-    public async Task<RepoContext> ScanAsync(string rootDirectory, GitGavelConfig config, bool allowExternalPaths = false, CancellationToken ct = default)
+    public async Task<RepoContext> ScanAsync(
+        string rootDirectory,
+        GitGavelConfig config,
+        bool allowExternalPaths = false,
+        CancellationToken ct = default)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(rootDirectory);
         ArgumentNullException.ThrowIfNull(config);
@@ -28,132 +35,18 @@ public class FileScanner
         }
 
         var dirWrapper = new DirectoryInfoWrapper(dirInfo);
+        var maxFileSizeBytes = config.Scope?.MaxFileSizeBytes > 0
+            ? config.Scope.MaxFileSizeBytes
+            : DefaultMaxFileSizeBytes;
 
-        // 1. Scan Spec Files
-        var specMatcher = new Matcher(StringComparison.OrdinalIgnoreCase);
-        foreach (var pattern in config.Scope.Specs.Include)
-        {
-            specMatcher.AddInclude(pattern);
-        }
+        var specFiles = await ScanSpecFilesAsync(rootDirectory, dirWrapper, config, maxFileSizeBytes, allowExternalPaths, ct);
+        var sourceFiles = await ScanSourceFilesAsync(rootDirectory, dirWrapper, config, maxFileSizeBytes, allowExternalPaths, ct);
+        var testFiles = await ScanTestFilesAsync(rootDirectory, dirWrapper, config, maxFileSizeBytes, allowExternalPaths, ct);
+        var sarifFindings = await LoadSarifReportsAsync(rootDirectory, config, allowExternalPaths, ct);
 
-        var specMatches = specMatcher.Execute(dirWrapper);
-        var specFiles = new List<ScannedFile>();
-
-        foreach (var file in specMatches.Files)
-        {
-            var absPath = Path.Combine(rootDirectory, file.Path);
-            if (!File.Exists(absPath)) continue;
-
-            // Enforce path containment and symlink boundaries
-            var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(absPath, rootDirectory, allowExternalPaths);
-
-            var content = await File.ReadAllTextAsync(verifiedPath, ct);
-            var lineCount = CountLines(content);
-            var fileInfo = new FileInfo(verifiedPath);
-
-            specFiles.Add(new ScannedFile(
-                RelativePath: file.Path,
-                AbsolutePath: verifiedPath,
-                LineCount: lineCount,
-                SizeBytes: fileInfo.Length,
-                Content: content,
-                IsSpec: true));
-        }
-
-        // 2. Scan Source Files
-        var sourceMatcher = new Matcher(StringComparison.OrdinalIgnoreCase);
-        foreach (var inc in config.Scope.Source.Include)
-        {
-            sourceMatcher.AddInclude(inc);
-        }
-        foreach (var exc in config.Scope.Source.Exclude)
-        {
-            sourceMatcher.AddExclude(exc);
-        }
-
-        var sourceMatches = sourceMatcher.Execute(dirWrapper);
-        var sourceFiles = new List<ScannedFile>();
-
-        foreach (var file in sourceMatches.Files)
-        {
-            var absPath = Path.Combine(rootDirectory, file.Path);
-            if (!File.Exists(absPath)) continue;
-
-            // Enforce path containment and symlink boundaries
-            var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(absPath, rootDirectory, allowExternalPaths);
-
-            var content = await File.ReadAllTextAsync(verifiedPath, ct);
-            var lineCount = CountLines(content);
-            var fileInfo = new FileInfo(verifiedPath);
-
-            sourceFiles.Add(new ScannedFile(
-                RelativePath: file.Path,
-                AbsolutePath: verifiedPath,
-                LineCount: lineCount,
-                SizeBytes: fileInfo.Length,
-                Content: content,
-                IsSpec: false));
-        }
-
-        // 3. Scan Test Files
-        var testMatcher = new Matcher(StringComparison.OrdinalIgnoreCase);
-        foreach (var inc in config.Scope.Tests.Include)
-        {
-            testMatcher.AddInclude(inc);
-        }
-        foreach (var exc in config.Scope.Tests.Exclude)
-        {
-            testMatcher.AddExclude(exc);
-        }
-
-        var testMatches = testMatcher.Execute(dirWrapper);
-        var testFiles = new List<ScannedFile>();
-
-        foreach (var file in testMatches.Files)
-        {
-            var absPath = Path.Combine(rootDirectory, file.Path);
-            if (!File.Exists(absPath)) continue;
-
-            // Enforce path containment and symlink boundaries
-            var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(absPath, rootDirectory, allowExternalPaths);
-
-            var content = await File.ReadAllTextAsync(verifiedPath, ct);
-            var lineCount = CountLines(content);
-            var fileInfo = new FileInfo(verifiedPath);
-
-            testFiles.Add(new ScannedFile(
-                RelativePath: file.Path,
-                AbsolutePath: verifiedPath,
-                LineCount: lineCount,
-                SizeBytes: fileInfo.Length,
-                Content: content,
-                IsSpec: false,
-                IsTest: true));
-        }
-
-        // 4. Scan SARIF Reports if configured
-        var sarifFindings = new List<SarifFinding>();
-        if (config.Subagents.Security.Enabled)
-        {
-            foreach (var sarifPath in config.Subagents.Security.SarifReports)
-            {
-                if (string.IsNullOrWhiteSpace(sarifPath)) continue;
-
-                var verifiedSarifPath = PathSecurity.ResolveAndVerifyWithinRoot(sarifPath, rootDirectory, allowExternalPaths);
-
-                if (File.Exists(verifiedSarifPath))
-                {
-                    var findings = await SarifParser.ParseFileAsync(verifiedSarifPath, ct);
-                    sarifFindings.AddRange(findings);
-                }
-            }
-        }
-
-        // 5. Precompute AST complexity analysis for source files
         var astSummaries = AstAnalyzer.AnalyzeAll(sourceFiles);
 
-        // 6. Retrieve recent git commit history for issue resolution tracking
-        var lookback = config.Subagents.IssueResolution.CommitLookbackCount > 0
+        var lookback = config.Subagents?.IssueResolution?.CommitLookbackCount > 0
             ? config.Subagents.IssueResolution.CommitLookbackCount
             : 50;
         var recentCommits = _gitService.GetRecentCommits(rootDirectory, lookback);
@@ -168,6 +61,164 @@ public class FileScanner
             AstSummaries = astSummaries,
             RecentCommits = recentCommits
         };
+    }
+
+    private static Task<List<ScannedFile>> ScanSpecFilesAsync(
+        string rootDirectory,
+        DirectoryInfoBase dirWrapper,
+        GitGavelConfig config,
+        long maxFileSizeBytes,
+        bool allowExternalPaths,
+        CancellationToken ct) =>
+        ScanFilesWithMatcherAsync(
+            rootDirectory,
+            dirWrapper,
+            includes: config.Scope?.Specs?.Include,
+            excludes: null,
+            isSpec: true,
+            isTest: false,
+            maxFileSizeBytes: maxFileSizeBytes,
+            allowExternalPaths: allowExternalPaths,
+            ct: ct);
+
+    private static Task<List<ScannedFile>> ScanSourceFilesAsync(
+        string rootDirectory,
+        DirectoryInfoBase dirWrapper,
+        GitGavelConfig config,
+        long maxFileSizeBytes,
+        bool allowExternalPaths,
+        CancellationToken ct) =>
+        ScanFilesWithMatcherAsync(
+            rootDirectory,
+            dirWrapper,
+            includes: config.Scope?.Source?.Include,
+            excludes: config.Scope?.Source?.Exclude,
+            isSpec: false,
+            isTest: false,
+            maxFileSizeBytes: maxFileSizeBytes,
+            allowExternalPaths: allowExternalPaths,
+            ct: ct);
+
+    private static Task<List<ScannedFile>> ScanTestFilesAsync(
+        string rootDirectory,
+        DirectoryInfoBase dirWrapper,
+        GitGavelConfig config,
+        long maxFileSizeBytes,
+        bool allowExternalPaths,
+        CancellationToken ct) =>
+        ScanFilesWithMatcherAsync(
+            rootDirectory,
+            dirWrapper,
+            includes: config.Scope?.Tests?.Include,
+            excludes: config.Scope?.Tests?.Exclude,
+            isSpec: false,
+            isTest: true,
+            maxFileSizeBytes: maxFileSizeBytes,
+            allowExternalPaths: allowExternalPaths,
+            ct: ct);
+
+    private static async Task<List<ScannedFile>> ScanFilesWithMatcherAsync(
+        string rootDirectory,
+        DirectoryInfoBase dirWrapper,
+        IEnumerable<string>? includes,
+        IEnumerable<string>? excludes,
+        bool isSpec,
+        bool isTest,
+        long maxFileSizeBytes,
+        bool allowExternalPaths,
+        CancellationToken ct)
+    {
+        var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+        var hasIncludes = false;
+
+        foreach (var pattern in includes ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(pattern)) continue;
+            matcher.AddInclude(pattern);
+            hasIncludes = true;
+        }
+
+        if (!hasIncludes)
+        {
+            return [];
+        }
+
+        foreach (var pattern in excludes ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(pattern)) continue;
+            matcher.AddExclude(pattern);
+        }
+
+        var matchResult = matcher.Execute(dirWrapper);
+        var matchedFiles = matchResult.Files.ToList();
+        if (matchedFiles.Count == 0)
+        {
+            return [];
+        }
+
+        using var throttle = new SemaphoreSlim(MaxConcurrentFileReads);
+        var tasks = matchedFiles.Select(async file =>
+        {
+            await throttle.WaitAsync(ct);
+            try
+            {
+                var absPath = Path.Combine(rootDirectory, file.Path);
+                if (!File.Exists(absPath)) return null;
+
+                var verifiedPath = PathSecurity.ResolveAndVerifyWithinRoot(absPath, rootDirectory, allowExternalPaths);
+                var fileInfo = new FileInfo(verifiedPath);
+                if (!fileInfo.Exists || fileInfo.Length > maxFileSizeBytes)
+                {
+                    return null;
+                }
+
+                var content = await File.ReadAllTextAsync(verifiedPath, ct);
+                var lineCount = CountLines(content);
+
+                return new ScannedFile(
+                    RelativePath: file.Path,
+                    AbsolutePath: verifiedPath,
+                    LineCount: lineCount,
+                    SizeBytes: fileInfo.Length,
+                    Content: content,
+                    IsSpec: isSpec,
+                    IsTest: isTest);
+            }
+            finally
+            {
+                throttle.Release();
+            }
+        });
+
+        var results = await Task.WhenAll(tasks);
+        return results.Where(f => f != null).Select(f => f!).ToList();
+    }
+
+    private static async Task<List<SarifFinding>> LoadSarifReportsAsync(
+        string rootDirectory,
+        GitGavelConfig config,
+        bool allowExternalPaths,
+        CancellationToken ct)
+    {
+        var sarifFindings = new List<SarifFinding>();
+        if (config.Subagents?.Security?.Enabled != true)
+        {
+            return sarifFindings;
+        }
+
+        foreach (var sarifPath in config.Subagents.Security.SarifReports ?? [])
+        {
+            if (string.IsNullOrWhiteSpace(sarifPath)) continue;
+
+            var verifiedSarifPath = PathSecurity.ResolveAndVerifyWithinRoot(sarifPath, rootDirectory, allowExternalPaths);
+            if (File.Exists(verifiedSarifPath))
+            {
+                var findings = await SarifParser.ParseFileAsync(verifiedSarifPath, ct);
+                sarifFindings.AddRange(findings);
+            }
+        }
+
+        return sarifFindings;
     }
 
     private static int CountLines(string text)

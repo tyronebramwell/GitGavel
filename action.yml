@@ -5,6 +5,10 @@ branding:
   icon: "check-circle"
   color: "blue"
 
+# Note: GitHub Actions automatically exposes all defined inputs below as INPUT_<UPPER_NAME>
+# environment variables inside the container (e.g., INPUT_REPOSITORY, INPUT_PR_NUMBER,
+# INPUT_DRY_RUN, INPUT_MOCK, INPUT_MOCK_LLM, INPUT_ALLOW_EXTERNAL_PATHS, INPUT_ALL_AGENTS),
+# which `gitgavel audit` reads directly in addition to the explicit CLI args below.
 inputs:
   config_path:
     description: "Path to .gitgavel.yml configuration file"
@@ -36,6 +40,10 @@ inputs:
     default: "false"
   allow_external_paths:
     description: "Explicitly allow configuration, SARIF, or reporting paths outside the repository root"
+    required: false
+    default: "false"
+  all_agents:
+    description: "Bypass Jev pre-execution subagent gating and execute all enabled subagents"
     required: false
     default: "false"
 

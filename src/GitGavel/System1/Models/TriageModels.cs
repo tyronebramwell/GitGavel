@@ -1,13 +1,35 @@
+using System.Text.RegularExpressions;
 using GitGavel.System2.Models;
 
 namespace GitGavel.System1.Models;
 
-public record ExistingIssue(
+public partial record ExistingIssue(
     int Number,
     string Title,
     string Body,
     string State = "open",
-    List<string>? Labels = null);
+    List<string>? Labels = null,
+    string? Fingerprint = null)
+{
+    [GeneratedRegex(@"<!--\s*gitgavel-metadata[\s\S]*?fingerprint:\s*([^\r\n]+)[\s\S]*?-->", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex EmbeddedFingerprintRegex();
+
+    public string? GetEffectiveFingerprint()
+    {
+        if (!string.IsNullOrWhiteSpace(Fingerprint))
+        {
+            return Fingerprint;
+        }
+
+        if (string.IsNullOrWhiteSpace(Body))
+        {
+            return null;
+        }
+
+        var match = EmbeddedFingerprintRegex().Match(Body);
+        return match.Success ? match.Groups[1].Value.Trim() : null;
+    }
+}
 
 public enum TriageStatus
 {

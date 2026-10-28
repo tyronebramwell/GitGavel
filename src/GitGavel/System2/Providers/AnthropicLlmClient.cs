@@ -1,108 +1,109 @@
 using System.Diagnostics;
-using System.Text;
+using System.Net.Http.Json;
 using System.Text.Json;
+using GitGavel.Configuration;
 using GitGavel.System2.Abstractions;
+using GitGavel.System2.Models;
 
 namespace GitGavel.System2.Providers;
 
-public class AnthropicLlmClient : ILlmClient
+public class AnthropicLlmClient : ILlmClient, IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private readonly string _apiKey;
+    private bool _disposed;
 
+    public string ProviderName => "anthropic";
     public TimeSpan Timeout => _httpClient.Timeout;
 
-    public AnthropicLlmClient(string? apiKey = null, HttpClient? httpClient = null, TimeSpan? timeout = null)
+    public AnthropicLlmClient(string? apiKey, HttpClient? httpClient = null, TimeSpan? timeout = null)
     {
-        _apiKey = apiKey
-            ?? Environment.GetEnvironmentVariable("ANTHROPIC_API_KEY")
-            ?? "";
-        _httpClient = httpClient ?? new HttpClient { Timeout = timeout ?? TimeSpan.FromSeconds(300) };
+        _apiKey = apiKey ?? "";
+        _ownsHttpClient = httpClient == null;
+        _httpClient = httpClient ?? new HttpClient();
+        _httpClient.Timeout = timeout ?? TimeSpan.FromSeconds(300);
     }
 
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
-        {
-            throw new InvalidOperationException("Anthropic API key is missing. Set ANTHROPIC_API_KEY environment variable.");
-        }
-
         var sw = Stopwatch.StartNew();
+        var model = LlmModelDefaults.ResolveAnthropicModel(request.Model);
 
-        var model = string.IsNullOrWhiteSpace(request.Model) || request.Model.StartsWith("gemini")
-            ? "claude-3-5-sonnet-20241022"
-            : request.Model;
+        using var reqMsg = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages");
+        reqMsg.Headers.Add("x-api-key", _apiKey);
+        reqMsg.Headers.Add("anthropic-version", "2023-06-01");
 
-        var userPrompt = request.Prompt;
-        if (request.ExpectJson && !userPrompt.Contains("JSON", StringComparison.OrdinalIgnoreCase))
+        var payload = new
         {
-            userPrompt += "\n\nRespond with valid JSON only.";
-        }
-
-        var payload = new Dictionary<string, object>
-        {
-            ["model"] = model,
-            ["max_tokens"] = 4096,
-            ["temperature"] = request.Temperature,
-            ["messages"] = new[]
+            model,
+            max_tokens = 4096,
+            temperature = request.Temperature,
+            messages = new[]
             {
-                new { role = "user", content = userPrompt }
+                new { role = "user", content = request.Prompt }
             }
         };
 
-        if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
+        reqMsg.Content = JsonContent.Create(payload);
+
+        using var response = await _httpClient.SendAsync(reqMsg, ct);
+        var rawBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
         {
-            payload["system"] = request.SystemPrompt;
+            throw new HttpRequestException($"Anthropic API error ({(int)response.StatusCode}): {rawBody}");
         }
 
-        var json = JsonSerializer.Serialize(payload);
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.anthropic.com/v1/messages")
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-        httpRequest.Headers.Add("x-api-key", _apiKey);
-        httpRequest.Headers.Add("anthropic-version", "2023-06-01");
-
-        var httpResponse = await _httpClient.SendAsync(httpRequest, ct);
         sw.Stop();
 
-        var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
-        if (!httpResponse.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException($"Anthropic API call failed with status {(int)httpResponse.StatusCode} ({httpResponse.StatusCode}): {responseBody}");
-        }
+        string content = "[]";
+        int promptTokens = 0;
+        int completionTokens = 0;
 
-        using var doc = JsonDocument.Parse(responseBody);
-        var root = doc.RootElement;
-
-        var text = "";
-        if (root.TryGetProperty("content", out var contentElem) && contentElem.GetArrayLength() > 0)
+        try
         {
-            foreach (var block in contentElem.EnumerateArray())
+            using var doc = JsonDocument.Parse(rawBody);
+            if (doc.RootElement.TryGetProperty("content", out var contentArr) &&
+                contentArr.ValueKind == JsonValueKind.Array &&
+                contentArr.GetArrayLength() > 0 &&
+                contentArr[0].TryGetProperty("text", out var textElem))
             {
-                if (block.TryGetProperty("type", out var t) && t.GetString() == "text" &&
-                    block.TryGetProperty("text", out var txt))
-                {
-                    text += txt.GetString();
-                }
+                content = textElem.GetString() ?? "[]";
+            }
+
+            if (doc.RootElement.TryGetProperty("usage", out var usage) &&
+                usage.ValueKind == JsonValueKind.Object)
+            {
+                if (usage.TryGetProperty("input_tokens", out var pt) && pt.TryGetInt32(out var ptVal))
+                    promptTokens = ptVal;
+                if (usage.TryGetProperty("output_tokens", out var ctElem) && ctElem.TryGetInt32(out var ctVal))
+                    completionTokens = ctVal;
             }
         }
-
-        var promptTokens = 0;
-        var completionTokens = 0;
-        if (root.TryGetProperty("usage", out var usage))
+        catch (JsonException ex)
         {
-            if (usage.TryGetProperty("input_tokens", out var it)) promptTokens = it.GetInt32();
-            if (usage.TryGetProperty("output_tokens", out var ot)) completionTokens = ot.GetInt32();
+            throw new InvalidOperationException($"Anthropic API returned malformed JSON response: {ex.Message}", ex);
         }
 
         return new LlmResponse
         {
-            Content = text,
+            Content = content,
             PromptTokens = promptTokens,
             CompletionTokens = completionTokens,
             DurationMs = sw.ElapsedMilliseconds,
             ModelUsed = model
         };
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
+        GC.SuppressFinalize(this);
     }
 }

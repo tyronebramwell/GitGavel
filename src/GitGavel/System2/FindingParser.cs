@@ -1,369 +1,293 @@
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using GitGavel.System2.Abstractions;
 using GitGavel.System2.Models;
 
 namespace GitGavel.System2;
 
+public sealed class FindingParserService : IFindingParser
+{
+    public List<FindingCandidate> ParseFindings(string rawResponse, string agentName, string defaultCategory, Action<string>? onWarning = null)
+        => FindingParser.ParseFindings(rawResponse, agentName, defaultCategory, onWarning);
+
+    public List<IssueResolutionCandidate> ParseIssueResolutions(string rawResponse, Action<string>? onWarning = null)
+        => FindingParser.ParseIssueResolutions(rawResponse, onWarning);
+}
+
 public static partial class FindingParser
 {
-    private static readonly JsonSerializerOptions JsonOpts = new()
+    [GeneratedRegex(@"```(?:json)?\s*([\s\S]*?)```", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex CodeFenceRegex();
+
+    public static List<FindingCandidate> ParseFindings(
+        string rawResponse,
+        string agentName,
+        string defaultCategory,
+        Action<string>? onWarning = null)
     {
-        PropertyNameCaseInsensitive = true
-    };
-
-    [GeneratedRegex(@"```(?:json)?\s*([\s\S]*?)\s*```", RegexOptions.Compiled)]
-    private static partial Regex MarkdownJsonFence();
-
-    public static List<FindingCandidate> ParseFindings(string rawText, string agentName, string defaultCategory)
-    {
-        var findings = new List<FindingCandidate>();
-        if (string.IsNullOrWhiteSpace(rawText)) return findings;
-
-        var jsonToParse = rawText.Trim();
-
-        // Extract JSON if wrapped in markdown fences
-        var match = MarkdownJsonFence().Match(jsonToParse);
-        if (match.Success)
+        if (string.IsNullOrWhiteSpace(rawResponse))
         {
-            jsonToParse = match.Groups[1].Value.Trim();
+            return [];
         }
 
+        var jsonText = ExtractJsonArrayOrObject(rawResponse);
+        if (string.IsNullOrWhiteSpace(jsonText))
+        {
+            return [];
+        }
+
+        var results = new List<FindingCandidate>();
         try
         {
-            using var doc = JsonDocument.Parse(jsonToParse);
-            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            using var doc = ParseJsonDocumentWithSalvage(jsonText, agentName, onWarning);
+            if (doc == null)
             {
-                foreach (var item in doc.RootElement.EnumerateArray())
-                {
-                    var finding = ParseSingleFinding(item, agentName, defaultCategory);
-                    if (finding != null) findings.Add(finding);
-                }
+                return results;
             }
-            else if (doc.RootElement.ValueKind == JsonValueKind.Object)
+
+            var arrayElement = ResolveArrayElement(doc.RootElement, "findings", "issues");
+            if (arrayElement.ValueKind != JsonValueKind.Array)
             {
-                // Might be wrapped in { "findings": [...] }
-                if (doc.RootElement.TryGetProperty("findings", out var array) && array.ValueKind == JsonValueKind.Array)
+                return results;
+            }
+
+            foreach (var item in arrayElement.EnumerateArray())
+            {
+                if (item.ValueKind != JsonValueKind.Object) continue;
+
+                var candidate = ParseSingleFinding(item, agentName, defaultCategory);
+                if (candidate != null)
                 {
-                    foreach (var item in array.EnumerateArray())
-                    {
-                        var finding = ParseSingleFinding(item, agentName, defaultCategory);
-                        if (finding != null) findings.Add(finding);
-                    }
-                }
-                else
-                {
-                    var single = ParseSingleFinding(doc.RootElement, agentName, defaultCategory);
-                    if (single != null) findings.Add(single);
+                    results.Add(candidate);
                 }
             }
         }
-        catch (JsonException)
+        catch (JsonException ex)
         {
-            // Fallback: If JSON is slightly truncated or malformed, attempt best-effort
+            onWarning?.Invoke($"Failed to parse findings JSON for {agentName}: {ex.Message}");
         }
 
-        return findings;
+        return results;
     }
 
-    private static FindingCandidate? ParseSingleFinding(JsonElement elem, string agentName, string defaultCategory)
+    public static List<IssueResolutionCandidate> ParseIssueResolutions(string rawResponse, Action<string>? onWarning = null)
+        => IssueResolutionParser.ParseIssueResolutions(rawResponse, onWarning);
+
+    private static FindingCandidate? ParseSingleFinding(JsonElement item, string agentName, string defaultCategory)
     {
-        if (elem.ValueKind != JsonValueKind.Object) return null;
+        var title = FindingReferenceEnricher.GetString(item, "title")
+                    ?? FindingReferenceEnricher.GetString(item, "name");
+        var summary = FindingReferenceEnricher.GetString(item, "summary")
+                      ?? FindingReferenceEnricher.GetString(item, "description");
+        if (string.IsNullOrWhiteSpace(title) || string.IsNullOrWhiteSpace(summary))
+        {
+            return null;
+        }
 
-        var title = GetString(elem, "title") ?? "Untitled Finding";
-        var summary = GetString(elem, "summary") ?? "";
-        var category = GetString(elem, "category") ?? defaultCategory;
-        var severity = GetString(elem, "severity") ?? "Medium";
-        var filePath = GetString(elem, "filePath") ?? "Unknown";
-        var remediation = GetString(elem, "suggestedRemediation") ?? GetString(elem, "remediation") ?? "Review and remediate.";
-        var details = GetString(elem, "details");
-        var attackVector = GetString(elem, "attackVector");
-        var owasp = GetString(elem, "owaspCategory") ?? GetString(elem, "owasp");
-        var testTier = GetString(elem, "testTier") ?? GetString(elem, "tier");
-        var testDefectType = GetString(elem, "testDefectType");
-        var defectType = GetString(elem, "defectType");
+        var category = FindingReferenceEnricher.GetString(item, "category") ?? defaultCategory;
+        var severity = FindingReferenceEnricher.GetString(item, "severity") ?? "Medium";
+        var filePath = FindingReferenceEnricher.GetString(item, "filePath")
+                       ?? FindingReferenceEnricher.GetString(item, "file")
+                       ?? FindingReferenceEnricher.GetString(item, "location")
+                       ?? "Unknown";
+        var startLine = GetInt(item, "startLine") ?? GetInt(item, "line") ?? 1;
+        var endLine = GetInt(item, "endLine") ?? startLine;
+        var remediation = FindingReferenceEnricher.GetString(item, "suggestedRemediation")
+                          ?? FindingReferenceEnricher.GetString(item, "remediation")
+                          ?? FindingReferenceEnricher.GetString(item, "fix")
+                          ?? "";
+        var owasp = FindingReferenceEnricher.GetString(item, "owaspCategory")
+                    ?? FindingReferenceEnricher.GetString(item, "owasp");
+        var attackVector = FindingReferenceEnricher.GetString(item, "attackVector")
+                           ?? FindingReferenceEnricher.GetString(item, "exploitVector");
+        var details = FindingReferenceEnricher.GetString(item, "details");
+        var testTier = FindingReferenceEnricher.GetString(item, "testTier")
+                       ?? FindingReferenceEnricher.GetString(item, "tier");
+        var defectType = FindingReferenceEnricher.GetString(item, "defectType");
+        var testDefectType = FindingReferenceEnricher.GetString(item, "testDefectType");
 
-        var startLine = GetInt(elem, "startLine", 1);
-        var endLine = GetInt(elem, "endLine", startLine);
-
-        var rawReferences = ParseReferences(elem);
-        var references = EnsureDefaultReferences(rawReferences, category, owasp, title);
+        var references = FindingReferenceEnricher.ExtractAndEnrichReferences(item, category, owasp, title);
 
         return new FindingCandidate
         {
             Title = title,
             Summary = summary,
+            Details = details,
             Category = category,
             Severity = severity,
             FilePath = filePath,
             StartLine = startLine,
             EndLine = endLine,
-            AgentName = agentName,
             SuggestedRemediation = remediation,
-            AttackVector = attackVector,
+            AgentName = agentName,
             OwaspCategory = owasp,
+            AttackVector = attackVector,
             TestTier = testTier,
-            TestDefectType = testDefectType,
             DefectType = defectType,
-            Details = details,
+            TestDefectType = testDefectType,
             References = references
         };
     }
 
-    public static List<IssueResolutionCandidate> ParseIssueResolutions(string rawText)
+    internal static JsonDocument? ParseJsonDocumentWithSalvage(string jsonText, string agentName, Action<string>? onWarning)
     {
-        var list = new List<IssueResolutionCandidate>();
-        if (string.IsNullOrWhiteSpace(rawText)) return list;
-
-        var jsonToParse = ExtractJson(rawText);
+        var options = new JsonDocumentOptions
+        {
+            AllowTrailingCommas = true,
+            CommentHandling = JsonCommentHandling.Skip
+        };
 
         try
         {
-            using var doc = JsonDocument.Parse(jsonToParse);
-            var root = doc.RootElement;
-
-            if (root.ValueKind == JsonValueKind.Array)
-            {
-                foreach (var item in root.EnumerateArray())
-                {
-                    var res = ParseSingleIssueResolution(item);
-                    if (res != null) list.Add(res);
-                }
-            }
-            else if (root.ValueKind == JsonValueKind.Object)
-            {
-                if (root.TryGetProperty("resolutions", out var arr) && arr.ValueKind == JsonValueKind.Array)
-                {
-                    foreach (var item in arr.EnumerateArray())
-                    {
-                        var res = ParseSingleIssueResolution(item);
-                        if (res != null) list.Add(res);
-                    }
-                }
-                else
-                {
-                    var res = ParseSingleIssueResolution(root);
-                    if (res != null) list.Add(res);
-                }
-            }
+            return JsonDocument.Parse(jsonText, options);
         }
-        catch (JsonException)
+        catch (JsonException firstEx)
         {
-            // Fallback on malformed JSON
-        }
+            // Attempt salvage if truncated array response
+            var salvaged = TrySalvageTruncatedJsonArray(jsonText);
+            if (salvaged != null)
+            {
+                try
+                {
+                    var doc = JsonDocument.Parse(salvaged, options);
+                    onWarning?.Invoke($"Salvaged truncated JSON response from {agentName} after parse error: {firstEx.Message}");
+                    return doc;
+                }
+                catch (JsonException)
+                {
+                    // Fall through to report original exception
+                }
+            }
 
-        return list;
+            onWarning?.Invoke($"Failed to parse JSON response from {agentName}: {firstEx.Message}");
+            return null;
+        }
     }
 
-    private static IssueResolutionCandidate? ParseSingleIssueResolution(JsonElement elem)
+    internal static string? TrySalvageTruncatedJsonArray(string jsonText)
     {
-        if (elem.ValueKind != JsonValueKind.Object) return null;
-
-        var issueNumber = GetInt(elem, "issueNumber", GetInt(elem, "number", 0));
-        if (issueNumber <= 0) return null;
-
-        var title = GetString(elem, "issueTitle") ?? GetString(elem, "title") ?? $"Issue #{issueNumber}";
-        var isResolved = true;
-        if (elem.TryGetProperty("isResolved", out var irProp) && (irProp.ValueKind == JsonValueKind.True || irProp.ValueKind == JsonValueKind.False))
+        var startIdx = jsonText.IndexOf('[');
+        if (startIdx < 0)
         {
-            isResolved = irProp.GetBoolean();
+            return null;
         }
 
-        var howFixed = GetString(elem, "howItWasFixed") ?? GetString(elem, "explanation") ?? GetString(elem, "summary") ?? "Resolved in recent commits.";
-
-        var commitShas = new List<string>();
-        if (elem.TryGetProperty("resolvingCommitShas", out var shasProp) && shasProp.ValueKind == JsonValueKind.Array)
+        // Walk backwards from end to find the last closing brace '}' of a completed object
+        var searchEnd = jsonText.Length - 1;
+        while (searchEnd > startIdx)
         {
-            foreach (var s in shasProp.EnumerateArray())
+            var lastBrace = jsonText.LastIndexOf('}', searchEnd);
+            if (lastBrace <= startIdx)
             {
-                if (s.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(s.GetString()))
+                break;
+            }
+
+            var candidate = jsonText[startIdx..(lastBrace + 1)] + "]";
+            try
+            {
+                using var _ = JsonDocument.Parse(candidate, new JsonDocumentOptions
                 {
-                    commitShas.Add(s.GetString()!);
-                }
+                    AllowTrailingCommas = true,
+                    CommentHandling = JsonCommentHandling.Skip
+                });
+                return candidate;
+            }
+            catch (JsonException)
+            {
+                searchEnd = lastBrace - 1;
             }
         }
 
-        var commitSummaries = new List<string>();
-        if (elem.TryGetProperty("resolvingCommitSummaries", out var sumProp) && sumProp.ValueKind == JsonValueKind.Array)
-        {
-            foreach (var s in sumProp.EnumerateArray())
-            {
-                if (s.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(s.GetString()))
-                {
-                    commitSummaries.Add(s.GetString()!);
-                }
-            }
-        }
-
-        return new IssueResolutionCandidate
-        {
-            IssueNumber = issueNumber,
-            IssueTitle = title,
-            IsResolved = isResolved,
-            HowItWasFixed = howFixed,
-            ResolvingCommitShas = commitShas,
-            ResolvingCommitSummaries = commitSummaries
-        };
-    }
-
-    private static string ExtractJson(string rawText)
-    {
-        var trimmed = rawText.Trim();
-        var match = MarkdownJsonFence().Match(trimmed);
-        return match.Success ? match.Groups[1].Value.Trim() : trimmed;
-    }
-
-    private static string? GetString(JsonElement elem, string propName)
-    {
-        if (elem.TryGetProperty(propName, out var p) && p.ValueKind == JsonValueKind.String)
-        {
-            return p.GetString();
-        }
         return null;
     }
 
-    private static int GetInt(JsonElement elem, string propName, int defaultValue)
+    internal static JsonElement ResolveArrayElement(JsonElement root, string primaryProperty, string secondaryProperty)
     {
-        if (elem.TryGetProperty(propName, out var p) && p.ValueKind == JsonValueKind.Number && p.TryGetInt32(out var val))
+        if (root.ValueKind == JsonValueKind.Array)
         {
-            return val;
+            return root;
         }
-        return defaultValue;
+
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            if (FindingReferenceEnricher.TryGetPropertyCaseInsensitive(root, primaryProperty, out var prop1) &&
+                prop1.ValueKind == JsonValueKind.Array)
+            {
+                return prop1;
+            }
+
+            if (FindingReferenceEnricher.TryGetPropertyCaseInsensitive(root, secondaryProperty, out var prop2) &&
+                prop2.ValueKind == JsonValueKind.Array)
+            {
+                return prop2;
+            }
+        }
+
+        return root;
     }
 
-    private static List<string> ParseReferences(JsonElement elem)
+    internal static string ExtractJsonArrayOrObject(string raw)
     {
-        var list = new List<string>();
-        if (!elem.TryGetProperty("references", out var prop) &&
-            !elem.TryGetProperty("learningReferences", out prop) &&
-            !elem.TryGetProperty("links", out prop))
+        var fenceMatch = CodeFenceRegex().Match(raw);
+        if (fenceMatch.Success)
         {
-            return list;
+            return fenceMatch.Groups[1].Value.Trim();
         }
 
-        if (prop.ValueKind == JsonValueKind.Array)
+        var trimmed = raw.Trim();
+        var startBracket = trimmed.IndexOf('[');
+        var endBracket = trimmed.LastIndexOf(']');
+        if (startBracket >= 0 && endBracket > startBracket)
         {
-            foreach (var item in prop.EnumerateArray())
-            {
-                if (item.ValueKind == JsonValueKind.String)
-                {
-                    var str = item.GetString();
-                    if (!string.IsNullOrWhiteSpace(str))
-                    {
-                        list.Add(FormatReferenceLink(str.Trim()));
-                    }
-                }
-                else if (item.ValueKind == JsonValueKind.Object)
-                {
-                    var title = GetString(item, "title") ?? GetString(item, "name") ?? "Documentation Reference";
-                    var url = GetString(item, "url") ?? GetString(item, "link") ?? GetString(item, "href");
-                    if (!string.IsNullOrWhiteSpace(url))
-                    {
-                        list.Add($"[{title}]({url})");
-                    }
-                }
-            }
-        }
-        else if (prop.ValueKind == JsonValueKind.String)
-        {
-            var str = prop.GetString();
-            if (!string.IsNullOrWhiteSpace(str))
-            {
-                list.Add(FormatReferenceLink(str.Trim()));
-            }
+            return trimmed[startBracket..(endBracket + 1)];
         }
 
-        return list;
+        var startBrace = trimmed.IndexOf('{');
+        var endBrace = trimmed.LastIndexOf('}');
+        if (startBracket >= 0 && (startBrace < 0 || startBracket < startBrace))
+        {
+            // Starts as a JSON array '[' without a matching ']'; return from '[' so ParseJsonDocumentWithSalvage handles truncation and emits warning
+            return trimmed[startBracket..];
+        }
+
+        if (startBrace >= 0 && endBrace > startBrace)
+        {
+            return trimmed[startBrace..(endBrace + 1)];
+        }
+
+        return trimmed;
     }
 
-    private static string FormatReferenceLink(string input)
+    internal static int? GetInt(JsonElement element, string propertyName)
     {
-        if (input.StartsWith('[') && input.Contains("](") && input.EndsWith(')'))
+        if (FindingReferenceEnricher.TryGetPropertyCaseInsensitive(element, propertyName, out var prop))
         {
-            return input;
+            if (prop.ValueKind == JsonValueKind.Number && prop.TryGetInt32(out var val))
+            {
+                return val;
+            }
+
+            if (prop.ValueKind == JsonValueKind.String && int.TryParse(prop.GetString(), out var parsed))
+            {
+                return parsed;
+            }
         }
 
-        if (Uri.TryCreate(input, UriKind.Absolute, out var uri))
-        {
-            if (uri.Host.Contains("stackoverflow.com", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"[Stack Overflow Discussion]({input})";
-            }
-            if (uri.Host.Contains("microsoft.com", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"[Microsoft Learn Documentation]({input})";
-            }
-            if (uri.Host.Contains("owasp.org", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"[OWASP Security Guidance]({input})";
-            }
-            if (uri.Host.Contains("refactoring.guru", StringComparison.OrdinalIgnoreCase))
-            {
-                return $"[Refactoring Guru Guide]({input})";
-            }
-            return $"[Reference Documentation]({input})";
-        }
-
-        return input;
+        return null;
     }
 
-    private static List<string> EnsureDefaultReferences(List<string> references, string category, string? owaspCategory, string title)
+    internal static bool? GetBool(JsonElement element, string propertyName)
     {
-        if (references.Count > 0) return references;
-
-        var defaults = new List<string>();
-
-        if (category.Equals("Security", StringComparison.OrdinalIgnoreCase))
+        if (FindingReferenceEnricher.TryGetPropertyCaseInsensitive(element, propertyName, out var prop))
         {
-            if (!string.IsNullOrWhiteSpace(owaspCategory) && owaspCategory.StartsWith("A01", StringComparison.OrdinalIgnoreCase))
+            if (prop.ValueKind == JsonValueKind.True) return true;
+            if (prop.ValueKind == JsonValueKind.False) return false;
+            if (prop.ValueKind == JsonValueKind.String && bool.TryParse(prop.GetString(), out var parsed))
             {
-                defaults.Add("[OWASP Top 10 - Broken Access Control](https://owasp.org/Top10/A01_2021-Broken_Access_Control/)");
+                return parsed;
             }
-            else if (!string.IsNullOrWhiteSpace(owaspCategory) && (owaspCategory.StartsWith("A02", StringComparison.OrdinalIgnoreCase) || owaspCategory.Contains("Crypto", StringComparison.OrdinalIgnoreCase)))
-            {
-                defaults.Add("[OWASP Top 10 - Cryptographic Failures](https://owasp.org/Top10/A02_2021-Cryptographic_Failures/)");
-            }
-            else if (!string.IsNullOrWhiteSpace(owaspCategory) && (owaspCategory.StartsWith("A03", StringComparison.OrdinalIgnoreCase) || owaspCategory.Contains("Injection", StringComparison.OrdinalIgnoreCase)))
-            {
-                defaults.Add("[OWASP Top 10 - Injection](https://owasp.org/Top10/A03_2021-Injection/)");
-            }
-            else if (!string.IsNullOrWhiteSpace(owaspCategory) && owaspCategory.StartsWith("A07", StringComparison.OrdinalIgnoreCase))
-            {
-                defaults.Add("[OWASP Top 10 - Identification and Authentication Failures](https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/)");
-                defaults.Add("[Microsoft Learn: Safe storage of app secrets](https://learn.microsoft.com/en-us/aspnet/core/security/app-secrets)");
-            }
-            else
-            {
-                defaults.Add("[OWASP Top 10 Security Risks Overview](https://owasp.org/www-project-top-ten/)");
-            }
-
-            defaults.Add("[Microsoft Learn: Secure Coding Guidelines](https://learn.microsoft.com/en-us/dotnet/standard/security/secure-coding-guidelines)");
-            defaults.Add("[Stack Overflow: Secure development practices](https://stackoverflow.com/questions/tagged/security)");
-        }
-        else if (category.Equals("SpecDrift", StringComparison.OrdinalIgnoreCase))
-        {
-            defaults.Add("[Microsoft Learn: RESTful Web API Design Best Practices](https://learn.microsoft.com/en-us/azure/architecture/best-practices/api-design)");
-            defaults.Add("[OpenAPI Specification Standard](https://spec.openapis.org/oas/latest.html)");
-            defaults.Add("[Stack Overflow: API specification and contract testing](https://stackoverflow.com/questions/tagged/contract-testing)");
-        }
-        else if (category.Equals("Refactoring", StringComparison.OrdinalIgnoreCase) || category.Contains("Debt", StringComparison.OrdinalIgnoreCase) || category.Contains("Coupling", StringComparison.OrdinalIgnoreCase))
-        {
-            defaults.Add("[Refactoring Guru: Code Smells and Refactoring Techniques](https://refactoring.guru/refactoring)");
-            defaults.Add("[Microsoft Learn: Common Web Application Architectures](https://learn.microsoft.com/en-us/dotnet/architecture/modern-web-apps-azure/common-web-application-architectures)");
-            defaults.Add("[Stack Overflow: Software design patterns and clean architecture](https://stackoverflow.com/questions/tagged/design-patterns)");
-        }
-        else if (category.Equals("Testing", StringComparison.OrdinalIgnoreCase) || category.Contains("Test", StringComparison.OrdinalIgnoreCase))
-        {
-            defaults.Add("[Microsoft Learn: Unit testing best practices with .NET Core and .NET Standard](https://learn.microsoft.com/en-us/dotnet/core/testing/unit-testing-best-practices)");
-            defaults.Add("[Martin Fowler: Practical Test Pyramid](https://martinfowler.com/articles/practical-test-pyramid.html)");
-            defaults.Add("[Stack Overflow: Automated test design patterns and assertions](https://stackoverflow.com/questions/tagged/unit-testing)");
-        }
-        else if (category.Equals("Reliability", StringComparison.OrdinalIgnoreCase) || category.Contains("Bug", StringComparison.OrdinalIgnoreCase) || category.Contains("Performance", StringComparison.OrdinalIgnoreCase))
-        {
-            defaults.Add("[Microsoft Learn: Reliability and Exception Handling Best Practices](https://learn.microsoft.com/en-us/dotnet/standard/exceptions/best-practices-for-exceptions)");
-            defaults.Add("[Microsoft Learn: Async/Await Best Practices and Concurrency](https://learn.microsoft.com/en-us/archive/msdn-magazine/2013/march/async-await-best-practices-in-asynchronous-programming)");
-            defaults.Add("[Stack Overflow: Performance optimization and resource management in .NET](https://stackoverflow.com/questions/tagged/performance)");
         }
 
-        return defaults;
+        return null;
     }
 }

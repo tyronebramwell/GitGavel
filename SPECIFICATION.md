@@ -398,7 +398,7 @@ version: 1
 # Scope of files to audit
 scope:
   specs:
-    include: ["docs/**/*.md", "specs/**/*.md", "api/openapi.json", "SPECIFICATION.md", "Dockerfile", "action.yml"]
+    include: ["SPECIFICATION.md", "README.md", "Dockerfile", "action.yml", "docs/**/*.md", "specs/**/*.md", "api/openapi.json"]
   source:
     include: ["**/*.cs", "**/*.ts", "**/*.py"]
     exclude: ["**/bin/**", "**/obj/**", "**/.git/**"]
@@ -406,6 +406,9 @@ scope:
     include: ["**/*.Tests/**", "tests/**", "**/*.spec.*", "**/*.test.*", "e2e/**"]
 
 # System 2 Subagents (Generative LLMs)
+# Supported providers: "gemini" | "openai" | "anthropic" | "mock".
+# If a subagent switches provider to "openai" or "anthropic" while leaving model at a default "gemini-*" value (or empty),
+# the provider automatically falls back to its default model ("gpt-4o" for OpenAI, "claude-3-5-sonnet-20241022" for Anthropic).
 subagents:
   timeoutSeconds: 300                 # Subagent LLM request timeout (default: 300s / 5 mins)
   specDrift:
@@ -498,6 +501,8 @@ github:
 ## 9. Packaging & GitHub Actions Deployment
 
 ### 9.1 Multi-Stage Dockerfile (Alpine + .NET 10)
+The container configures `git config --global --add safe.directory '*'` during image build (and passes `-c safe.directory=*` per git invocation) so GitGavel can safely inspect bind-mounted GitHub Actions workspaces owned by external host UIDs without triggering `dubious ownership` errors.
+
 ```dockerfile
 # Build stage
 FROM mcr.microsoft.com/dotnet/sdk:10.0-alpine AS build
@@ -529,6 +534,8 @@ ENTRYPOINT ["gitgavel"]
 ```
 
 ### 9.2 GitHub Action Workflow with Reports Upload (`action.yml`)
+`action.yml` passes `--config` and `--dir` via container `args`, while all optional action inputs (`repository`, `pr_number`, `dry_run`, `mock`, `mock_llm`, `allow_external_paths`, `all_agents`) are automatically bound via GitHub Actions `INPUT_*` environment variables inside `AuditCommand`.
+
 ```yaml
 name: "GitGavel AI Repo & PR Audit"
 on:

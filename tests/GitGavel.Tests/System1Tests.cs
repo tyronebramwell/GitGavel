@@ -916,4 +916,147 @@ public class System1Tests
         result.EstimatedTokensSaved.Should().Be(0);
         mockJev.Verify(c => c.SystemOneAsync(It.IsAny<JsonContent>(), It.IsAny<IReadOnlyDictionary<string, Question>>(), It.IsAny<JevRequestOptions>(), It.IsAny<CancellationToken>()), Times.Never);
     }
+
+    [Fact]
+    public async Task TypeSafeJevEngine_SubagentGating_InFullRepoMode_WhenBypassIsTrue_ActivatesAllAgentsWithoutCallingJev()
+    {
+        var mockJev = new Mock<IJevClient>(MockBehavior.Strict);
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 20, 200, "class App {}", false)],
+            SarifFindings = []
+        };
+
+        var config = new GitGavelConfig
+        {
+            Triage = new TriageConfig
+            {
+                SubagentGating = new SubagentGatingConfig
+                {
+                    Enabled = true,
+                    BypassInFullRepoMode = true
+                }
+            }
+        };
+
+        var candidates = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidates, config);
+
+        result.ActiveAgentNames.Should().BeEquivalentTo(candidates);
+        result.SkippedAgentNames.Should().BeEmpty();
+        result.Decisions.Should().OnlyContain(d => d.IsDeterministicOverride && d.Confidence == 1.0);
+        mockJev.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task TypeSafeJevEngine_SubagentGating_WhenCandidateAgentsEmpty_ReturnsEmptyWithoutCallingJev()
+    {
+        var mockJev = new Mock<IJevClient>(MockBehavior.Strict);
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+        var context = new RepoContext { RootDirectory = "/mock", SpecFiles = [], SourceFiles = [], SarifFindings = [] };
+
+        var result = await engine.EvaluateSubagentGatingAsync(context, [], new GitGavelConfig());
+
+        result.Decisions.Should().BeEmpty();
+        result.EstimatedTokensSaved.Should().Be(0);
+        mockJev.VerifyNoOtherCalls();
+    }
+
+    [Fact]
+    public async Task TypeSafeJevEngine_SubagentGating_CombinesDeterministicOverridesWithJevNoulAnswers()
+    {
+        var mockJev = new Mock<IJevClient>();
+        var gatingResponse = new SystemOneResponse
+        {
+            Answers = new Dictionary<string, Answer>
+            {
+                ["run_reliability"] = new NoulAnswer { Noul = 0.80 },
+                ["run_refactoring"] = new NoulAnswer { Noul = 0.20 },
+                ["run_tests"] = new NoulAnswer { Noul = 0.30 }
+            }
+        };
+
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.IsAny<IReadOnlyDictionary<string, Question>>(),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ReturnsAsync(gatingResponse);
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [new ScannedFile("SPECIFICATION.md", "/mock/SPECIFICATION.md", 50, 500, "# Spec", true, DiffPatch: "@@ -1 +1 @@")],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 50, 500, "class App {}", false, DiffPatch: "@@ -1 +1 @@")],
+            SarifFindings = [new SarifFinding("sec-1", "Alert", "error", "src/App.cs", 10, 12)],
+            ActivePullRequest = new PullRequestContext { PrNumber = 5, Title = "Update spec and app" }
+        };
+
+        var candidates = new[] { "SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent", "RefactoringAgent", "TestSentinelAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidates, new GitGavelConfig());
+
+        // SpecDriftAgent and SecurityAuditor deterministically overridden; ReliabilityAgent passes Jev Noul (0.80 >= 0.50)
+        result.ActiveAgentNames.Should().BeEquivalentTo(["SpecDriftAgent", "SecurityAuditor", "ReliabilityAgent"]);
+        result.SkippedAgentNames.Should().BeEquivalentTo(["RefactoringAgent", "TestSentinelAgent"]);
+        result.Decisions.Single(d => d.AgentName == "SpecDriftAgent").IsDeterministicOverride.Should().BeTrue();
+        result.Decisions.Single(d => d.AgentName == "SecurityAuditor").IsDeterministicOverride.Should().BeTrue();
+        result.Decisions.Single(d => d.AgentName == "ReliabilityAgent").IsDeterministicOverride.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task TypeSafeJevEngine_SubagentGating_WhenJevClientThrows_FallsBackToActivatingAllRemainingAgents()
+    {
+        var mockJev = new Mock<IJevClient>();
+        mockJev.Setup(c => c.SystemOneAsync(
+            It.IsAny<JsonContent>(),
+            It.IsAny<IReadOnlyDictionary<string, Question>>(),
+            It.IsAny<JevRequestOptions>(),
+            It.IsAny<CancellationToken>()))
+            .ThrowsAsync(new HttpRequestException("Jev API unavailable"));
+
+        var engine = new TypeSafeJevEngine(mockJev.Object);
+        var context = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [],
+            SourceFiles = [new ScannedFile("src/App.cs", "/mock/src/App.cs", 50, 500, "class App {}", false)],
+            SarifFindings = []
+        };
+
+        var candidates = new[] { "ReliabilityAgent", "RefactoringAgent" };
+        var result = await engine.EvaluateSubagentGatingAsync(context, candidates, new GitGavelConfig());
+
+        result.ActiveAgentNames.Should().BeEquivalentTo(candidates);
+        result.SkippedAgentNames.Should().BeEmpty();
+        result.Decisions.Should().OnlyContain(d => d.ShouldRun && d.Reason.Contains("fail-open"));
+    }
+
+    [Fact]
+    public void ExistingIssue_GetEffectiveFingerprint_And_TriageEngineHelper_BuildIssueSummary_HandleBoundaries()
+    {
+        var issueWithProp = new ExistingIssue(1, "Title", "Body", Fingerprint: "explicit_fp");
+        issueWithProp.GetEffectiveFingerprint().Should().Be("explicit_fp");
+
+        var issueWithEmbedded = new ExistingIssue(2, "Title", "Text\n<!-- gitgavel-metadata\nfingerprint: embedded_fp_123\n-->");
+        issueWithEmbedded.GetEffectiveFingerprint().Should().Be("embedded_fp_123");
+
+        var issueWithoutFp = new ExistingIssue(3, "Title", "Plain body without metadata");
+        issueWithoutFp.GetEffectiveFingerprint().Should().BeNull();
+
+        TriageEngineHelper.BuildIssueSummary(null).Should().Be("");
+        TriageEngineHelper.BuildIssueSummary("Short body").Should().Be("Short body");
+
+        var body500 = new string('X', 500);
+        TriageEngineHelper.BuildIssueSummary(body500).Should().Be(body500);
+
+        var body505 = new string('X', 505);
+        var truncated = TriageEngineHelper.BuildIssueSummary(body505);
+        truncated.Should().HaveLength(503);
+        truncated.Should().EndWith("...");
+    }
 }

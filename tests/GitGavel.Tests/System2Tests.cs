@@ -1522,4 +1522,106 @@ public class System2Tests
             s.SkipReason.Should().NotBeNullOrWhiteSpace();
         }
     }
+
+    [Fact]
+    public void FindingParser_WhenJsonArrayIsTruncated_SalvagesCompletedFindingsAndEmitsWarning()
+    {
+        var truncatedJson = """
+        [
+          {
+            "title": "Completed First Finding",
+            "summary": "This finding object is complete.",
+            "category": "Reliability",
+            "severity": "High",
+            "filePath": "src/Service.cs",
+            "startLine": 10,
+            "endLine": 20,
+            "suggestedRemediation": "Fix 1"
+          },
+          {
+            "title": "Truncated Second Finding",
+            "summary": "This object was cut off mid-stream due to max_tokens
+        """;
+
+        string? capturedWarning = null;
+        var findings = FindingParser.ParseFindings(truncatedJson, "ReliabilityAgent", "Reliability", w => capturedWarning = w);
+
+        findings.Should().ContainSingle();
+        findings[0].Title.Should().Be("Completed First Finding");
+        capturedWarning.Should().NotBeNullOrWhiteSpace();
+        capturedWarning.Should().Contain("Salvaged truncated JSON");
+    }
+
+    [Fact]
+    public void FindingParser_ParseIssueResolutions_CoversAllSchemaVariantsAndEdgeCases()
+    {
+        var wrappedJson = """
+        ```json
+        {
+          "resolutions": [
+            {
+              "number": "42",
+              "title": "Fix String Int And Bool Parsing",
+              "resolved": "true",
+              "explanation": "Resolved via fallback property names",
+              "commitSha": "abcdef1234567"
+            },
+            {
+              "issueNumber": 0,
+              "issueTitle": "Invalid Zero Issue Number Should Be Skipped",
+              "isResolved": true
+            }
+          ]
+        }
+        ```
+        """;
+
+        var parserService = new FindingParserService();
+        var candidates = parserService.ParseIssueResolutions(wrappedJson);
+
+        candidates.Should().ContainSingle();
+        candidates[0].IssueNumber.Should().Be(42);
+        candidates[0].IssueTitle.Should().Be("Fix String Int And Bool Parsing");
+        candidates[0].IsResolved.Should().BeTrue();
+        candidates[0].HowItWasFixed.Should().Be("Resolved via fallback property names");
+        candidates[0].ResolvingCommitShas.Should().ContainSingle().Which.Should().Be("abcdef1234567");
+
+        // Empty or invalid JSON returns empty list and invokes warning
+        parserService.ParseIssueResolutions("").Should().BeEmpty();
+        string? warn = null;
+        parserService.ParseIssueResolutions("[{broken json", w => warn = w).Should().BeEmpty();
+        warn.Should().NotBeNullOrWhiteSpace();
+    }
+
+    [Fact]
+    public async Task SubagentOrchestrator_EvaluateIssueResolutionsAsync_RespectsDisabledConfigAndEmptyIssues()
+    {
+        var orchestrator = new SubagentOrchestrator(new MockLlmClient());
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock",
+            SpecFiles = [],
+            SourceFiles = [],
+            SarifFindings = []
+        };
+
+        var disabledConfig = new GitGavelConfig();
+        disabledConfig.Subagents.IssueResolution.Enabled = false;
+
+        var openIssues = new List<ExistingIssue> { new(101, "Open Issue", "Body", "open") };
+
+        // 1. Disabled in config -> returns empty
+        var resDisabled = await orchestrator.EvaluateIssueResolutionsAsync(openIssues, repoContext, disabledConfig);
+        resDisabled.Candidates.Should().BeEmpty();
+
+        // 2. Enabled but empty issues -> returns empty
+        var enabledConfig = new GitGavelConfig();
+        var resEmpty = await orchestrator.EvaluateIssueResolutionsAsync([], repoContext, enabledConfig);
+        resEmpty.Candidates.Should().BeEmpty();
+
+        // 3. Enabled with open issues -> evaluates and returns candidates
+        var resActive = await orchestrator.EvaluateIssueResolutionsAsync(openIssues, repoContext, enabledConfig);
+        resActive.IsSuccess.Should().BeTrue();
+        resActive.Candidates.Should().ContainSingle(c => c.IssueNumber == 101);
+    }
 }

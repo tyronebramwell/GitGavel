@@ -311,6 +311,99 @@ public class ReportingTests
         }
     }
 
+    [Fact]
+    public void TestQualityReporter_Generate_PartitionsFindingsAcrossAllTiersAndDefectTypesAndHandlesZeroFindings()
+    {
+        var ctx = CreateSampleContext(Path.GetTempPath());
+
+        // 1. Zero test findings
+        var emptyCtx = ctx with
+        {
+            Orchestration = ctx.Orchestration with { AllFindings = [] }
+        };
+        var emptyReport = GitGavel.Reporting.Reporters.TestQualityReporter.Generate(emptyCtx);
+        emptyReport.Should().Contain("No critical missing test suites detected");
+        emptyReport.Should().Contain("No omitted boundary or edge-case scenarios flagged");
+        emptyReport.Should().Contain("No test flakiness or maintainability defects flagged");
+
+        // 2. Populated across Unit, Integration, E2E, Unspecified and MissingTest, ExtraScenario, TestQuality
+        var findings = new List<FindingCandidate>
+        {
+            new()
+            {
+                Title = "Unit Missing Test",
+                Summary = "Unit summary",
+                Category = "Testing",
+                Severity = "High",
+                TestTier = "Unit",
+                TestDefectType = "MissingTest",
+                FilePath = "src/A.cs",
+                StartLine = 10,
+                EndLine = 20,
+                AgentName = "TestSentinelAgent",
+                SuggestedRemediation = "[Fact] void TestA() {}",
+                References = ["[xUnit Docs](https://xunit.net)"]
+            },
+            new()
+            {
+                Title = "Integration Extra Scenario",
+                Summary = "Integration boundary",
+                Category = "Testing",
+                Severity = "Medium",
+                TestTier = "Integration",
+                TestDefectType = "ExtraScenario",
+                FilePath = "src/B.cs",
+                StartLine = 15,
+                EndLine = 25,
+                AgentName = "TestSentinelAgent",
+                SuggestedRemediation = "[Fact] void TestB() {}",
+                Details = "Boundary details"
+            },
+            new()
+            {
+                Title = "E2E Flaky Test Quality",
+                Summary = "Thread.Sleep in E2E test",
+                Category = "Testing",
+                Severity = "Low",
+                TestTier = "E2E",
+                TestDefectType = "TestQuality",
+                FilePath = "tests/E2ETests.cs",
+                StartLine = 30,
+                EndLine = 40,
+                AgentName = "TestSentinelAgent",
+                SuggestedRemediation = "Use async wait condition"
+            },
+            new()
+            {
+                Title = "Unspecified Tier Finding",
+                Summary = "General test gap",
+                Category = "Testing",
+                Severity = "Medium",
+                TestTier = null,
+                TestDefectType = null,
+                FilePath = "src/C.cs",
+                StartLine = 1,
+                EndLine = 5,
+                AgentName = "TestSentinelAgent",
+                SuggestedRemediation = "Add test"
+            }
+        };
+
+        var richCtx = ctx with
+        {
+            Orchestration = ctx.Orchestration with { AllFindings = findings }
+        };
+
+        var report = GitGavel.Reporting.Reporters.TestQualityReporter.Generate(richCtx);
+        report.Should().Contain("Unit Missing Test");
+        report.Should().Contain("Integration Extra Scenario");
+        report.Should().Contain("E2E Flaky Test Quality");
+        report.Should().Contain("Unspecified Tier Finding");
+        report.Should().Contain("## 2. Missing Tests Catalog");
+        report.Should().Contain("## 3. Extra Scenario & Boundary Blueprint");
+        report.Should().Contain("## 4. Test Suite Quality & Reliability");
+    }
+
     private sealed class TestCustomReporter : IReporter
     {
         public string ReportName => "CustomTest";

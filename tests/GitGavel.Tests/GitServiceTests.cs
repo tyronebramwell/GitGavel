@@ -211,4 +211,62 @@ public class GitServiceTests
             "--author=Jane Doe <jane@example.com>"
         ], options => options.WithStrictOrdering());
     }
+
+    [Theory]
+    [InlineData("https://github.com/octocat/Hello-World.git", true, "octocat", "Hello-World")]
+    [InlineData("https://github.com/octocat/Hello-World/", true, "octocat", "Hello-World")]
+    [InlineData("git@github.com:octocat/Hello-World.git", true, "octocat", "Hello-World")]
+    [InlineData("ssh://git@github.com/octocat/Hello-World.git", true, "octocat", "Hello-World")]
+    [InlineData("https://github.com/", false, "", "")]
+    [InlineData("https://github.com/only-owner", false, "", "")]
+    [InlineData("git@github.com:", false, "", "")]
+    [InlineData("git@github.com:only-owner", false, "", "")]
+    [InlineData("not-a-valid-url", false, "", "")]
+    [InlineData("///", false, "", "")]
+    [InlineData("", false, "", "")]
+    public void GitService_TryParseGitRemoteUrl_HandlesValidAndMalformedUrls(
+        string remoteUrl,
+        bool expectedSuccess,
+        string expectedOwner,
+        string expectedRepo)
+    {
+        var ok = GitService.TryParseGitRemoteUrl(remoteUrl, out var coords);
+        ok.Should().Be(expectedSuccess);
+        if (expectedSuccess)
+        {
+            coords.owner.Should().Be(expectedOwner);
+            coords.repo.Should().Be(expectedRepo);
+        }
+    }
+
+    [Fact]
+    public void GitService_ResolvePullRequestNumber_ParsesGitHubEventPayloadFile()
+    {
+        var tempEventFile = Path.GetTempFileName();
+        try
+        {
+            // 1. pull_request.number payload
+            File.WriteAllText(tempEventFile, """{ "pull_request": { "number": 123 } }""");
+            var env = new DictEnvProvider(new Dictionary<string, string?>
+            {
+                ["GITHUB_EVENT_PATH"] = tempEventFile
+            });
+            var gitService = new GitService(environment: env);
+            gitService.ResolvePullRequestNumber(null).Should().Be(123);
+
+            // 2. issue_comment on PR payload (issue.number + issue.pull_request)
+            File.WriteAllText(tempEventFile, """{ "issue": { "number": 456, "pull_request": {} } }""");
+            gitService.ResolvePullRequestNumber(null).Should().Be(456);
+        }
+        finally
+        {
+            if (File.Exists(tempEventFile)) File.Delete(tempEventFile);
+        }
+    }
+
+    private sealed class DictEnvProvider(Dictionary<string, string?> vars) : GitGavel.Configuration.IEnvironmentProvider
+    {
+        public string? GetEnvironmentVariable(string variable) => vars.TryGetValue(variable, out var v) ? v : null;
+        public void SetEnvironmentVariable(string variable, string? value) => vars[variable] = value;
+    }
 }

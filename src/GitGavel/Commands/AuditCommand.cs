@@ -21,11 +21,19 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
 {
     private readonly IGitService _gitService;
     private readonly ISubagentOrchestrator? _injectedOrchestrator;
+    private readonly IGitHubService? _injectedGitHubService;
+    private readonly ITriageEngine? _injectedTriageEngine;
 
-    public AuditCommand(IGitService? gitService = null, ISubagentOrchestrator? orchestrator = null)
+    public AuditCommand(
+        IGitService? gitService = null,
+        ISubagentOrchestrator? orchestrator = null,
+        IGitHubService? gitHubService = null,
+        ITriageEngine? triageEngine = null)
     {
         _gitService = gitService ?? new GitService();
         _injectedOrchestrator = orchestrator;
+        _injectedGitHubService = gitHubService;
+        _injectedTriageEngine = triageEngine;
     }
 
     public class Settings : CommandSettings
@@ -88,6 +96,8 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             settings.UseMockLlm = true;
         if (!settings.AllowExternalPaths && string.Equals(Environment.GetEnvironmentVariable("INPUT_ALLOW_EXTERNAL_PATHS"), "true", StringComparison.OrdinalIgnoreCase))
             settings.AllowExternalPaths = true;
+        if (!settings.AllAgents && string.Equals(Environment.GetEnvironmentVariable("INPUT_ALL_AGENTS"), "true", StringComparison.OrdinalIgnoreCase))
+            settings.AllAgents = true;
         if (settings.RepoDirectory == "." && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_REPO_DIRECTORY")))
             settings.RepoDirectory = Environment.GetEnvironmentVariable("INPUT_REPO_DIRECTORY")!;
         if (settings.ConfigPath == ".gitgavel.yml" && !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("INPUT_CONFIG_PATH")))
@@ -130,9 +140,9 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         }
 
         var ghToken = Environment.GetEnvironmentVariable("GH_TOKEN") ?? Environment.GetEnvironmentVariable("GITHUB_TOKEN");
-        IGitHubService gitHubService = settings.UseMock || (settings.DryRun && string.IsNullOrWhiteSpace(ghToken))
+        IGitHubService gitHubService = _injectedGitHubService ?? (settings.UseMock || (settings.DryRun && string.IsNullOrWhiteSpace(ghToken))
             ? mockGh
-            : new GitHubService();
+            : new GitHubService());
 
         // 1. File & Context Scanning
         var scanner = new FileScanner(_gitService);
@@ -188,9 +198,9 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         }
 
         var jevApiKey = KeyResolver.Resolve(config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
-        ITriageEngine triageEngine = settings.UseMock || config.Triage.Engine == "llm-synthesizer"
+        ITriageEngine triageEngine = _injectedTriageEngine ?? (settings.UseMock || config.Triage.Engine == "llm-synthesizer"
             ? new MockTriageEngine()
-            : new TypeSafeJevEngine(jevApiKey);
+            : new TypeSafeJevEngine(jevApiKey));
 
         var apiKey = KeyResolver.Resolve(config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY");
         var defaultTimeout = TimeSpan.FromSeconds(config.Subagents.TimeoutSeconds > 0 ? config.Subagents.TimeoutSeconds : 300);

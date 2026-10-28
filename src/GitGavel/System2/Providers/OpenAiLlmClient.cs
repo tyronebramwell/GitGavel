@@ -1,98 +1,113 @@
 using System.Diagnostics;
 using System.Net.Http.Headers;
-using System.Text;
+using System.Net.Http.Json;
 using System.Text.Json;
+using GitGavel.Configuration;
 using GitGavel.System2.Abstractions;
+using GitGavel.System2.Models;
 
 namespace GitGavel.System2.Providers;
 
-public class OpenAiLlmClient : ILlmClient
+public class OpenAiLlmClient : ILlmClient, IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private readonly string _apiKey;
+    private bool _disposed;
 
+    public string ProviderName => "openai";
     public TimeSpan Timeout => _httpClient.Timeout;
 
-    public OpenAiLlmClient(string? apiKey = null, HttpClient? httpClient = null, TimeSpan? timeout = null)
+    public OpenAiLlmClient(string? apiKey, HttpClient? httpClient = null, TimeSpan? timeout = null)
     {
-        _apiKey = apiKey
-            ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-            ?? "";
-        _httpClient = httpClient ?? new HttpClient { Timeout = timeout ?? TimeSpan.FromSeconds(300) };
+        _apiKey = apiKey ?? "";
+        _ownsHttpClient = httpClient == null;
+        _httpClient = httpClient ?? new HttpClient();
+        _httpClient.Timeout = timeout ?? TimeSpan.FromSeconds(300);
     }
 
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
-        {
-            throw new InvalidOperationException("OpenAI API key is missing. Set OPENAI_API_KEY environment variable.");
-        }
-
         var sw = Stopwatch.StartNew();
+        var model = LlmModelDefaults.ResolveOpenAiModel(request.Model);
 
-        var messages = new List<object>();
-        if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
-        {
-            messages.Add(new { role = "system", content = request.SystemPrompt });
-        }
-        messages.Add(new { role = "user", content = request.Prompt });
+        using var reqMsg = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions");
+        reqMsg.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
 
-        var payload = new Dictionary<string, object>
+        var payload = new
         {
-            ["model"] = string.IsNullOrWhiteSpace(request.Model) || request.Model.StartsWith("gemini") ? "gpt-4o" : request.Model,
-            ["messages"] = messages,
-            ["temperature"] = request.Temperature
+            model,
+            temperature = request.Temperature,
+            messages = new[]
+            {
+                new { role = "system", content = "You are an autonomous enterprise software auditing agent. Respond ONLY with a valid JSON array." },
+                new { role = "user", content = request.Prompt }
+            }
         };
 
-        if (request.ExpectJson)
+        reqMsg.Content = JsonContent.Create(payload);
+
+        using var response = await _httpClient.SendAsync(reqMsg, ct);
+        var rawBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
         {
-            payload["response_format"] = new { type = "json_object" };
+            throw new HttpRequestException($"OpenAI API error ({(int)response.StatusCode}): {rawBody}");
         }
 
-        var json = JsonSerializer.Serialize(payload);
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, "https://api.openai.com/v1/chat/completions")
-        {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
-        };
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-
-        var httpResponse = await _httpClient.SendAsync(httpRequest, ct);
         sw.Stop();
 
-        var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
-        if (!httpResponse.IsSuccessStatusCode)
-        {
-            throw new HttpRequestException($"OpenAI API call failed with status {(int)httpResponse.StatusCode} ({httpResponse.StatusCode}): {responseBody}");
-        }
+        string content = "[]";
+        int promptTokens = 0;
+        int completionTokens = 0;
 
-        using var doc = JsonDocument.Parse(responseBody);
-        var root = doc.RootElement;
-
-        var text = "";
-        if (root.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0)
+        try
         {
-            var first = choices[0];
-            if (first.TryGetProperty("message", out var msg) && msg.TryGetProperty("content", out var content))
+            using var doc = JsonDocument.Parse(rawBody);
+            if (doc.RootElement.TryGetProperty("choices", out var choices) &&
+                choices.ValueKind == JsonValueKind.Array &&
+                choices.GetArrayLength() > 0)
             {
-                text = content.GetString() ?? "";
+                var first = choices[0];
+                if (first.TryGetProperty("message", out var msg) &&
+                    msg.TryGetProperty("content", out var contentElem))
+                {
+                    content = contentElem.GetString() ?? "[]";
+                }
+            }
+
+            if (doc.RootElement.TryGetProperty("usage", out var usage) &&
+                usage.ValueKind == JsonValueKind.Object)
+            {
+                if (usage.TryGetProperty("prompt_tokens", out var pt) && pt.TryGetInt32(out var ptVal))
+                    promptTokens = ptVal;
+                if (usage.TryGetProperty("completion_tokens", out var ctElem) && ctElem.TryGetInt32(out var ctVal))
+                    completionTokens = ctVal;
             }
         }
-
-        var promptTokens = 0;
-        var completionTokens = 0;
-        if (root.TryGetProperty("usage", out var usage))
+        catch (JsonException ex)
         {
-            if (usage.TryGetProperty("prompt_tokens", out var pt)) promptTokens = pt.GetInt32();
-            if (usage.TryGetProperty("completion_tokens", out var ctCount)) completionTokens = ctCount.GetInt32();
+            throw new InvalidOperationException($"OpenAI API returned malformed JSON response: {ex.Message}", ex);
         }
 
         return new LlmResponse
         {
-            Content = text,
+            Content = content,
             PromptTokens = promptTokens,
             CompletionTokens = completionTokens,
             DurationMs = sw.ElapsedMilliseconds,
-            ModelUsed = payload["model"].ToString() ?? request.Model
+            ModelUsed = model
         };
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
+        GC.SuppressFinalize(this);
     }
 }

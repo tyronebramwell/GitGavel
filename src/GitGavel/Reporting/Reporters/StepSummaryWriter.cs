@@ -1,13 +1,25 @@
 using System.Text;
+using GitGavel.Configuration;
 using GitGavel.System1.Models;
 
 namespace GitGavel.Reporting.Reporters;
 
 public static class StepSummaryWriter
 {
-    public static async Task WriteAsync(ReportContext ctx, string? customSummaryPath = null, CancellationToken ct = default)
+    public static Task WriteAsync(
+        ReportContext ctx,
+        string? customSummaryPath = null,
+        CancellationToken ct = default) =>
+        WriteAsync(ctx, customSummaryPath, SystemEnvironmentProvider.Instance, onWarning: null, ct);
+
+    public static async Task WriteAsync(
+        ReportContext ctx,
+        string? customSummaryPath,
+        IEnvironmentProvider environment,
+        Action<string>? onWarning = null,
+        CancellationToken ct = default)
     {
-        var summaryPath = customSummaryPath ?? Environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
+        var summaryPath = customSummaryPath ?? environment.GetEnvironmentVariable("GITHUB_STEP_SUMMARY");
         if (string.IsNullOrWhiteSpace(summaryPath)) return;
 
         var sb = new StringBuilder();
@@ -74,9 +86,9 @@ public static class StepSummaryWriter
         {
             await File.AppendAllTextAsync(summaryPath, sb.ToString(), ct);
         }
-        catch
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException or NotSupportedException)
         {
-            // Do not crash the run if writing to step summary fails
+            onWarning?.Invoke($"Failed to write GitHub step summary to '{summaryPath}': {ex.Message}");
         }
     }
 

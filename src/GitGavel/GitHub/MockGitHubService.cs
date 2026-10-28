@@ -51,10 +51,7 @@ public class MockGitHubService : IGitHubService
         GitGavelConfig config,
         CancellationToken ct = default)
     {
-        var col = decision.TargetColumn == "Backlog"
-            ? config.Github.ProjectsV2.Columns.Backlog
-            : config.Github.ProjectsV2.Columns.HumanReview;
-
+        var col = GitHubService.ResolveTargetColumnName(decision.TargetColumn, config.Github.ProjectsV2.Columns);
         ProjectAssignments.Add((issueResult, col));
         return Task.CompletedTask;
     }

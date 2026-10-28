@@ -5,10 +5,23 @@ namespace GitGavel.System2.Providers;
 public class MockLlmClient : ILlmClient
 {
     private readonly Func<LlmRequest, LlmResponse>? _responseHandler;
+    private readonly Dictionary<string, string> _agentResponses = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<(Func<LlmRequest, bool> Predicate, string JsonContent)> _customRules = [];
 
     public MockLlmClient(Func<LlmRequest, LlmResponse>? responseHandler = null)
     {
         _responseHandler = responseHandler;
+        InitializeDefaultAgentResponses();
+    }
+
+    public void RegisterAgentResponse(string agentName, string jsonContent)
+    {
+        _agentResponses[agentName] = jsonContent;
+    }
+
+    public void RegisterRule(Func<LlmRequest, bool> predicate, string jsonContent)
+    {
+        _customRules.Add((predicate, jsonContent));
     }
 
     public Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)
@@ -18,12 +31,53 @@ public class MockLlmClient : ILlmClient
             return Task.FromResult(_responseHandler(request));
         }
 
-        string sampleJson;
-        var p = request.Prompt;
-
-        if (p.StartsWith("You are the Spec Drift Agent", StringComparison.OrdinalIgnoreCase))
+        foreach (var (predicate, jsonContent) in _customRules)
         {
-            sampleJson = """
+            if (predicate(request))
+            {
+                return Task.FromResult(CreateResponse(jsonContent, request.Model));
+            }
+        }
+
+        if (!string.IsNullOrWhiteSpace(request.AgentName) &&
+            _agentResponses.TryGetValue(request.AgentName, out var agentJson))
+        {
+            return Task.FromResult(CreateResponse(agentJson, request.Model));
+        }
+
+        var inferredAgent = InferAgentFromPrompt(request.Prompt ?? "");
+        var sampleJson = _agentResponses.TryGetValue(inferredAgent, out var fallbackJson)
+            ? fallbackJson
+            : _agentResponses["RefactoringAgent"];
+
+        return Task.FromResult(CreateResponse(sampleJson, request.Model));
+    }
+
+    private static string InferAgentFromPrompt(string prompt)
+    {
+        if (prompt.StartsWith("You are the Spec Drift Agent", StringComparison.OrdinalIgnoreCase))
+            return "SpecDriftAgent";
+        if (prompt.StartsWith("You are the Security Auditor Agent", StringComparison.OrdinalIgnoreCase))
+            return "SecurityAuditor";
+        if (prompt.StartsWith("You are the Test Sentinel Agent", StringComparison.OrdinalIgnoreCase))
+            return "TestSentinelAgent";
+        if (prompt.StartsWith("You are the Issue Resolution Agent", StringComparison.OrdinalIgnoreCase))
+            return "IssueResolutionAuditor";
+        return "RefactoringAgent";
+    }
+
+    private static LlmResponse CreateResponse(string content, string model) => new()
+    {
+        Content = content,
+        PromptTokens = 120,
+        CompletionTokens = 85,
+        DurationMs = 25,
+        ModelUsed = model
+    };
+
+    private void InitializeDefaultAgentResponses()
+    {
+        _agentResponses["SpecDriftAgent"] = """
             [
               {
                 "title": "Model Tier Specification Drift in SPECIFICATION.md",
@@ -43,10 +97,8 @@ public class MockLlmClient : ILlmClient
               }
             ]
             """;
-        }
-        else if (p.StartsWith("You are the Security Auditor Agent", StringComparison.OrdinalIgnoreCase))
-        {
-            sampleJson = """
+
+        _agentResponses["SecurityAuditor"] = """
             [
               {
                 "title": "Plain-text API Key Storage in Repository Configuration",
@@ -67,10 +119,8 @@ public class MockLlmClient : ILlmClient
               }
             ]
             """;
-        }
-        else if (p.StartsWith("You are the Test Sentinel Agent", StringComparison.OrdinalIgnoreCase))
-        {
-            sampleJson = """
+
+        _agentResponses["TestSentinelAgent"] = """
             [
               {
                 "title": "Missing Integration & E2E Tests for CLI Audit Pipeline",
@@ -92,10 +142,8 @@ public class MockLlmClient : ILlmClient
               }
             ]
             """;
-        }
-        else if (p.StartsWith("You are the Issue Resolution Agent", StringComparison.OrdinalIgnoreCase))
-        {
-            sampleJson = """
+
+        _agentResponses["IssueResolutionAuditor"] = """
             [
               {
                 "issueNumber": 101,
@@ -107,10 +155,8 @@ public class MockLlmClient : ILlmClient
               }
             ]
             """;
-        }
-        else
-        {
-            sampleJson = """
+
+        _agentResponses["RefactoringAgent"] = """
             [
               {
                 "title": "AuditCommand.ExecuteAsync High Cyclomatic Complexity",
@@ -130,15 +176,7 @@ public class MockLlmClient : ILlmClient
               }
             ]
             """;
-        }
 
-        return Task.FromResult(new LlmResponse
-        {
-            Content = sampleJson,
-            PromptTokens = 120,
-            CompletionTokens = 85,
-            DurationMs = 25,
-            ModelUsed = request.Model
-        });
+        _agentResponses["ReliabilityAgent"] = _agentResponses["RefactoringAgent"];
     }
 }

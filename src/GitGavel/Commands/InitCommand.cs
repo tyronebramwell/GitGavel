@@ -13,11 +13,18 @@ public class InitCommand : Command<InitCommand.Settings>
         [CommandOption("-f|--force")]
         [Description("Overwrite existing .gitgavel.yml if present.")]
         public bool Force { get; set; }
+
+        [CommandOption("-d|--dir <DIR>")]
+        [Description("Target directory in which to create .gitgavel.yml (defaults to current directory).")]
+        [DefaultValue(".")]
+        public string TargetDirectory { get; set; } = ".";
     }
 
     public override int Execute([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
     {
-        const string targetFile = ".gitgavel.yml";
+        var targetFile = string.IsNullOrWhiteSpace(settings.TargetDirectory) || settings.TargetDirectory == "."
+            ? ".gitgavel.yml"
+            : Path.Combine(settings.TargetDirectory, ".gitgavel.yml");
 
         if (File.Exists(targetFile) && !settings.Force)
         {

@@ -1,93 +1,58 @@
 using System.Text;
+using GitGavel.Configuration;
 using GitGavel.Discovery;
 using GitGavel.System2.Abstractions;
-using GitGavel.System2.Models;
 
 namespace GitGavel.System2.Agents;
 
-public class TestSentinelAgent : ISubagent
+public class TestSentinelAgent : BaseLlmAgent
 {
-    private readonly ILlmClient _llmClient;
-    private readonly string _model;
     private readonly IReadOnlyList<string> _tiers;
 
-    public string Name => "TestSentinelAgent";
+    public override string Name => "TestSentinelAgent";
+    protected override string DefaultCategory => "Testing";
+    protected override string SystemPrompt => "You are a principal SDET and test architecture specialist auditing automated test coverage and quality. Output strictly a JSON array of findings.";
 
-    public TestSentinelAgent(ILlmClient llmClient, string model = "gemini-2.5-pro", IReadOnlyList<string>? tiers = null)
+    public TestSentinelAgent(ILlmClient llmClient, string model = LlmModelDefaults.DefaultGeminiProModel, IReadOnlyList<string>? tiers = null)
+        : base(llmClient, LlmModelDefaults.ResolveSubagentModel(model, LlmModelDefaults.DefaultGeminiProModel))
     {
-        _llmClient = llmClient;
-        _model = model;
         _tiers = tiers ?? ["unit", "integration", "e2e"];
     }
 
-    public async Task<SubagentResult> ExecuteAsync(RepoContext context, CancellationToken ct = default)
-    {
-        if (context.SourceFiles.Count == 0 && context.TestFiles.Count == 0)
-        {
-            return new SubagentResult
-            {
-                AgentName = Name,
-                Findings = [],
-                DurationMs = 0
-            };
-        }
+    protected override bool ShouldSkipExecution(RepoContext context)
+        => (context.SourceFiles?.Count ?? 0) == 0 && (context.TestFiles?.Count ?? 0) == 0;
 
+    protected override Task<string> BuildPromptAsync(RepoContext context, CancellationToken ct)
+    {
         var promptBuilder = new StringBuilder();
         promptBuilder.AppendLine("You are the Test Sentinel Agent. Audit the repository's automated testing suite across the test pyramid.");
         promptBuilder.AppendLine($"Target Test Tiers: {string.Join(", ", _tiers)}");
-        if (context.IsPullRequestMode && context.ActivePullRequest != null)
-        {
-            promptBuilder.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
-            promptBuilder.AppendLine("ANTI-SCOPE-CREEP RULE: Only report High or Medium severity missing tests for completely untested production logic introduced in this PR. If the PR already includes unit/integration tests for the modified production methods, return []. Do NOT request tests for trivial constructors, getters, or tests for existing tests.");
-        }
+
+        AgentPromptBuilder.AppendPullRequestGuidance(
+            promptBuilder,
+            context,
+            "ANTI-SCOPE-CREEP RULE: Only report High or Medium severity missing tests for completely untested production logic introduced in this PR. If the PR already includes unit/integration tests for the modified production methods, return []. Do NOT request tests for trivial constructors, getters, or tests for existing tests.");
+
         promptBuilder.AppendLine("Identify:");
         promptBuilder.AppendLine("1. Missing Test Detection (MissingTest): critical production classes, public methods, business rules, or error paths lacking Unit, Integration, or E2E coverage.");
         promptBuilder.AppendLine("2. Extra Scenarios & Boundary Coverage (ExtraScenario): omitted edge cases, boundary conditions, invalid inputs, concurrency/race hazards, and negative assertions.");
         promptBuilder.AppendLine("3. Test Quality & Maintainability (TestQuality): brittle assertions, tautological mocks, flaky patterns (e.g., arbitrary Thread.Sleep), or poor fixture isolation.");
 
-        promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Production Symbol & Complexity Map:");
-        var summaries = context.AstSummaries.Count > 0 ? context.AstSummaries : AstAnalyzer.AnalyzeAll(context.SourceFiles);
-        foreach (var sum in summaries)
-        {
-            var symbolList = sum.Symbols.Count > 0
-                ? string.Join(", ", sum.Symbols.Select(s => $"{s.Kind} {s.Name}"))
-                : "None";
-            promptBuilder.AppendLine($"- File: `{sum.RelativePath}` | Symbols: {symbolList} | Complexity: {sum.TotalComplexityScore}");
-        }
+        var summaries = AgentPromptBuilder.ResolveAstSummaries(context);
+        AgentPromptBuilder.AppendSymbolMap(promptBuilder, summaries, includeComplexity: true, heading: "### Production Symbol & Complexity Map:");
 
-        promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Existing Automated Test Suite Files:");
-        if (context.TestFiles.Count == 0)
+        if ((context.TestFiles?.Count ?? 0) == 0)
         {
+            promptBuilder.AppendLine();
+            promptBuilder.AppendLine("### Existing Automated Test Suite Files:");
             promptBuilder.AppendLine("(No automated test files discovered in scope)");
         }
         else
         {
-            foreach (var testFile in context.TestFiles)
-            {
-                promptBuilder.AppendLine($"--- Test File: {testFile.RelativePath} ---");
-                if (!string.IsNullOrWhiteSpace(testFile.DiffPatch))
-                {
-                    promptBuilder.AppendLine("PR Diff Patch:");
-                    promptBuilder.AppendLine(testFile.DiffPatch.Length > 4000 ? testFile.DiffPatch[..4000] + "\n...(truncated)" : testFile.DiffPatch);
-                }
-                promptBuilder.AppendLine(testFile.Content.Length > 8000 ? testFile.Content[..8000] + "\n...(truncated)" : testFile.Content);
-            }
+            AgentPromptBuilder.AppendFilesSection(promptBuilder, context.TestFiles!, "### Existing Automated Test Suite Files:", fileLabelPrefix: "Test File");
         }
 
-        promptBuilder.AppendLine();
-        promptBuilder.AppendLine("### Production Source Files Under Audit:");
-        foreach (var src in context.SourceFiles)
-        {
-            promptBuilder.AppendLine($"--- Source File: {src.RelativePath} ---");
-            if (!string.IsNullOrWhiteSpace(src.DiffPatch))
-            {
-                promptBuilder.AppendLine("PR Diff Patch:");
-                promptBuilder.AppendLine(src.DiffPatch.Length > 4000 ? src.DiffPatch[..4000] + "\n...(truncated)" : src.DiffPatch);
-            }
-            promptBuilder.AppendLine(src.Content.Length > 8000 ? src.Content[..8000] + "\n...(truncated)" : src.Content);
-        }
+        AgentPromptBuilder.AppendFilesSection(promptBuilder, context.SourceFiles ?? [], "### Production Source Files Under Audit:", fileLabelPrefix: "Source File");
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("Return a JSON array of findings with the following schema for each item:");
@@ -113,35 +78,6 @@ public class TestSentinelAgent : ISubagent
         ]
         """);
 
-        try
-        {
-            var response = await _llmClient.GenerateAsync(new LlmRequest
-            {
-                Prompt = promptBuilder.ToString(),
-                SystemPrompt = "You are a principal SDET and test architecture specialist auditing automated test coverage and quality. Output strictly a JSON array of findings.",
-                Model = _model,
-                ExpectJson = true
-            }, ct);
-
-            var findings = FindingParser.ParseFindings(response.Content, Name, "Testing");
-
-            return new SubagentResult
-            {
-                AgentName = Name,
-                Findings = findings,
-                PromptTokens = response.PromptTokens,
-                CompletionTokens = response.CompletionTokens,
-                DurationMs = response.DurationMs
-            };
-        }
-        catch (Exception ex)
-        {
-            return new SubagentResult
-            {
-                AgentName = Name,
-                IsSuccess = false,
-                ErrorMessage = ex.Message
-            };
-        }
+        return Task.FromResult(promptBuilder.ToString());
     }
 }

@@ -1,127 +1,124 @@
 using System.Diagnostics;
-using System.Net.Http.Headers;
-using System.Text;
+using System.Net.Http.Json;
 using System.Text.Json;
+using GitGavel.Configuration;
 using GitGavel.System2.Abstractions;
+using GitGavel.System2.Models;
 
 namespace GitGavel.System2.Providers;
 
-public class GeminiLlmClient : ILlmClient
+public class GeminiLlmClient : ILlmClient, IDisposable
 {
     private readonly HttpClient _httpClient;
+    private readonly bool _ownsHttpClient;
     private readonly string _apiKey;
+    private bool _disposed;
 
+    public string ProviderName => "gemini";
     public TimeSpan Timeout => _httpClient.Timeout;
 
-    public GeminiLlmClient(string? apiKey = null, HttpClient? httpClient = null, TimeSpan? timeout = null)
+    public GeminiLlmClient(string? apiKey, HttpClient? httpClient = null, TimeSpan? timeout = null)
     {
-        _apiKey = apiKey
-            ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY")
-            ?? Environment.GetEnvironmentVariable("AI_API_KEY")
-            ?? "";
-        _httpClient = httpClient ?? new HttpClient { Timeout = timeout ?? TimeSpan.FromSeconds(300) };
+        _apiKey = apiKey ?? "";
+        _ownsHttpClient = httpClient == null;
+        _httpClient = httpClient ?? new HttpClient();
+        _httpClient.Timeout = timeout ?? TimeSpan.FromSeconds(300);
     }
 
     public async Task<LlmResponse> GenerateAsync(LlmRequest request, CancellationToken ct = default)
     {
-        if (string.IsNullOrWhiteSpace(_apiKey))
-        {
-            throw new InvalidOperationException("Gemini API key is missing. Set GEMINI_API_KEY or AI_API_KEY environment variable.");
-        }
-
         var sw = Stopwatch.StartNew();
+        var model = LlmModelDefaults.ResolveGeminiModel(request.Model);
 
-        // Build Gemini REST payload
-        var payload = new Dictionary<string, object>();
+        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent";
 
-        if (!string.IsNullOrWhiteSpace(request.SystemPrompt))
+        var payload = new
         {
-            payload["systemInstruction"] = new
+            contents = new[]
             {
-                parts = new[] { new { text = request.SystemPrompt } }
-            };
-        }
-
-        payload["contents"] = new[]
-        {
-            new
+                new
+                {
+                    role = "user",
+                    parts = new[] { new { text = request.Prompt } }
+                }
+            },
+            generationConfig = new
             {
-                parts = new[] { new { text = request.Prompt } }
+                temperature = request.Temperature,
+                responseMimeType = request.ExpectJson ? "application/json" : "text/plain"
             }
         };
-
-        var genConfig = new Dictionary<string, object>
-        {
-            ["temperature"] = request.Temperature
-        };
-
-        if (request.ExpectJson)
-        {
-            genConfig["responseMimeType"] = "application/json";
-        }
-
-        payload["generationConfig"] = genConfig;
-
-        var json = JsonSerializer.Serialize(payload);
-        var modelName = request.Model.StartsWith("models/", StringComparison.OrdinalIgnoreCase)
-            ? request.Model["models/".Length..]
-            : request.Model;
-        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{modelName}:generateContent";
 
         using var httpRequest = new HttpRequestMessage(HttpMethod.Post, url)
         {
-            Content = new StringContent(json, Encoding.UTF8, "application/json")
+            Content = JsonContent.Create(payload)
         };
+        httpRequest.Headers.Add("x-goog-api-key", _apiKey);
 
-        if (!string.IsNullOrWhiteSpace(_apiKey))
+        using var response = await _httpClient.SendAsync(httpRequest, ct);
+        var rawBody = await response.Content.ReadAsStringAsync(ct);
+
+        if (!response.IsSuccessStatusCode)
         {
-            httpRequest.Headers.Add("x-goog-api-key", _apiKey);
+            throw new HttpRequestException($"Gemini API error ({(int)response.StatusCode}): {rawBody}");
         }
 
-        using var httpResponse = await _httpClient.SendAsync(httpRequest, ct);
         sw.Stop();
 
-        var responseBody = await httpResponse.Content.ReadAsStringAsync(ct);
+        string content = "[]";
+        int promptTokens = 0;
+        int completionTokens = 0;
 
-        if (!httpResponse.IsSuccessStatusCode)
+        try
         {
-            throw new HttpRequestException(
-                $"Gemini API call failed with status code {(int)httpResponse.StatusCode} ({httpResponse.StatusCode}): {responseBody}");
-        }
-
-        using var doc = JsonDocument.Parse(responseBody);
-        var root = doc.RootElement;
-
-        var text = "";
-        if (root.TryGetProperty("candidates", out var candidates) &&
-            candidates.ValueKind == JsonValueKind.Array &&
-            candidates.GetArrayLength() > 0)
-        {
-            var firstCandidate = candidates[0];
-            if (firstCandidate.TryGetProperty("content", out var contentObj) &&
-                contentObj.TryGetProperty("parts", out var parts) &&
-                parts.ValueKind == JsonValueKind.Array &&
-                parts.GetArrayLength() > 0)
+            using var doc = JsonDocument.Parse(rawBody);
+            if (doc.RootElement.TryGetProperty("candidates", out var candidates) &&
+                candidates.ValueKind == JsonValueKind.Array &&
+                candidates.GetArrayLength() > 0)
             {
-                text = parts[0].GetProperty("text").GetString() ?? "";
+                var first = candidates[0];
+                if (first.TryGetProperty("content", out var contentElem) &&
+                    contentElem.TryGetProperty("parts", out var parts) &&
+                    parts.ValueKind == JsonValueKind.Array &&
+                    parts.GetArrayLength() > 0 &&
+                    parts[0].TryGetProperty("text", out var textElem))
+                {
+                    content = textElem.GetString() ?? "[]";
+                }
+            }
+
+            if (doc.RootElement.TryGetProperty("usageMetadata", out var usage) &&
+                usage.ValueKind == JsonValueKind.Object)
+            {
+                if (usage.TryGetProperty("promptTokenCount", out var pt) && pt.TryGetInt32(out var ptVal))
+                    promptTokens = ptVal;
+                if (usage.TryGetProperty("candidatesTokenCount", out var ctElem) && ctElem.TryGetInt32(out var ctVal))
+                    completionTokens = ctVal;
             }
         }
-
-        var promptTokens = 0;
-        var completionTokens = 0;
-        if (root.TryGetProperty("usageMetadata", out var usage))
+        catch (JsonException ex)
         {
-            if (usage.TryGetProperty("promptTokenCount", out var pt)) promptTokens = pt.GetInt32();
-            if (usage.TryGetProperty("candidatesTokenCount", out var ctCount)) completionTokens = ctCount.GetInt32();
+            throw new InvalidOperationException($"Gemini API returned malformed JSON response: {ex.Message}", ex);
         }
 
         return new LlmResponse
         {
-            Content = text,
+            Content = content,
             PromptTokens = promptTokens,
             CompletionTokens = completionTokens,
             DurationMs = sw.ElapsedMilliseconds,
-            ModelUsed = request.Model
+            ModelUsed = model
         };
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+        if (_ownsHttpClient)
+        {
+            _httpClient.Dispose();
+        }
+        GC.SuppressFinalize(this);
     }
 }
