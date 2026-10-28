@@ -28,9 +28,9 @@ public class LlmClientFactory : ILlmClientFactory
         return provider switch
         {
             "mock" => new MockLlmClient(),
-            "openai" => new OpenAiLlmClient(KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "OPENAI_API_KEY", "AI_API_KEY"), timeout: timeout),
-            "anthropic" => new AnthropicLlmClient(KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "ANTHROPIC_API_KEY", "AI_API_KEY"), timeout: timeout),
-            _ => _fallbackClient ?? new GeminiLlmClient(KeyResolver.Resolve(config.Subagents.ApiKey, config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY"), timeout: timeout)
+            "openai" => new OpenAiLlmClient(KeyResolver.Resolve(config.Subagents.ApiKeyEnv, "OPENAI_API_KEY", "AI_API_KEY"), timeout: timeout),
+            "anthropic" => new AnthropicLlmClient(KeyResolver.Resolve(config.Subagents.ApiKeyEnv, "ANTHROPIC_API_KEY", "AI_API_KEY"), timeout: timeout),
+            _ => _fallbackClient ?? new GeminiLlmClient(KeyResolver.Resolve(config.Subagents.ApiKeyEnv, "GEMINI_API_KEY", "AI_API_KEY"), timeout: timeout)
         };
     }
 }

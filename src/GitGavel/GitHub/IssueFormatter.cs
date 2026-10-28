@@ -28,41 +28,93 @@ public static partial class IssueFormatter
     [GeneratedRegex(@"<!--\s*gitgavel-resolution\s*([\s\S]*?)-->", RegexOptions.Compiled)]
     private static partial Regex ResolutionCommentRegex();
 
+    [GeneratedRegex(@"<\s*(script|iframe|object|embed|form|input|button|svg|math|base|link|meta)\b[^>]*>[\s\S]*?<\s*/\s*\1\s*>", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex DangerousHtmlBlockRegex();
+
+    [GeneratedRegex(@"<\s*(script|iframe|object|embed|form|input|button|svg|math|base|link|meta)\b[^>]*>", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex DangerousHtmlSelfClosingRegex();
+
+    [GeneratedRegex(@"\bon\w+\s*=\s*(?:""[^""]*""|'[^']*'|[^\s>]+)", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex DangerousAttributeRegex();
+
+    [GeneratedRegex(@"\[([^\]]+)\]\(([^)]+)\)", RegexOptions.Compiled)]
+    private static partial Regex MarkdownLinkRegex();
+
+    public static string SanitizeContent(string? input)
+    {
+        if (string.IsNullOrWhiteSpace(input)) return string.Empty;
+
+        // 1. Prevent comment delimiter breakout/spoofing of gitgavel metadata comment blocks
+        var text = input.Replace("<!--", "&lt;!--").Replace("-->", "--&gt;");
+
+        // 2. Strip dangerous script/iframe/object blocks and tags
+        text = DangerousHtmlBlockRegex().Replace(text, string.Empty);
+        text = DangerousHtmlSelfClosingRegex().Replace(text, string.Empty);
+
+        // 3. Remove inline event handlers (onload, onerror, onclick, etc.)
+        text = DangerousAttributeRegex().Replace(text, string.Empty);
+
+        return text;
+    }
+
+    public static string SanitizeReference(string? reference)
+    {
+        if (string.IsNullOrWhiteSpace(reference)) return string.Empty;
+
+        var sanitized = SanitizeContent(reference);
+
+        // Disallow dangerous pseudo-protocols like javascript:, data:, vbscript: while allowing relative and anchor links
+        return MarkdownLinkRegex().Replace(sanitized, match =>
+        {
+            var title = match.Groups[1].Value;
+            var url = match.Groups[2].Value.Trim();
+
+            if (url.StartsWith("javascript:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("data:", StringComparison.OrdinalIgnoreCase) ||
+                url.StartsWith("vbscript:", StringComparison.OrdinalIgnoreCase))
+            {
+                return $"[{title}](#)";
+            }
+
+            return $"[{title}]({url})";
+        });
+    }
+
     public static string FormatIssueBody(TriageDecision decision)
     {
         var f = decision.Finding;
         var sb = new StringBuilder();
 
         sb.AppendLine("## ⚠️ Summary");
-        sb.AppendLine(f.Summary);
+        sb.AppendLine(SanitizeContent(f.Summary));
         sb.AppendLine();
 
         sb.AppendLine("## 📍 Details");
-        sb.AppendLine($"- **File**: `{f.FilePath}` (lines {f.StartLine}–{f.EndLine})");
-        sb.AppendLine($"- **Category**: {f.Category}");
-        sb.AppendLine($"- **Severity**: {f.Severity}");
+        sb.AppendLine($"- **File**: `{SanitizeContent(f.FilePath)}` (lines {f.StartLine}–{f.EndLine})");
+        sb.AppendLine($"- **Category**: {SanitizeContent(f.Category)}");
+        sb.AppendLine($"- **Severity**: {SanitizeContent(f.Severity)}");
         sb.AppendLine($"- **Jev Urgency Score**: {decision.JevScore:F1} / 5.0 ({decision.PriorityLabel})");
         sb.AppendLine($"- **Triage Confidence**: {decision.Confidence:P0}");
         if (!string.IsNullOrWhiteSpace(f.OwaspCategory))
         {
-            sb.AppendLine($"- **OWASP Classification**: `{f.OwaspCategory}`");
+            sb.AppendLine($"- **OWASP Classification**: `{SanitizeContent(f.OwaspCategory)}`");
         }
         if (!string.IsNullOrWhiteSpace(f.AttackVector))
         {
-            sb.AppendLine($"- **Attack Vector**: {f.AttackVector}");
+            sb.AppendLine($"- **Attack Vector**: {SanitizeContent(f.AttackVector)}");
         }
         sb.AppendLine();
 
         sb.AppendLine("## 💡 Suggested Remediation");
         sb.AppendLine("```csharp");
-        sb.AppendLine(f.SuggestedRemediation);
+        sb.AppendLine(SanitizeContent(f.SuggestedRemediation));
         sb.AppendLine("```");
         sb.AppendLine();
 
         if (!string.IsNullOrWhiteSpace(f.Details))
         {
             sb.AppendLine("## 🔍 Context & Details");
-            sb.AppendLine(f.Details);
+            sb.AppendLine(SanitizeContent(f.Details));
             sb.AppendLine();
         }
 
@@ -71,7 +123,7 @@ public static partial class IssueFormatter
             sb.AppendLine("## 📚 Learning & Research References");
             foreach (var r in f.References)
             {
-                sb.AppendLine($"- {r}");
+                sb.AppendLine($"- {SanitizeReference(r)}");
             }
             sb.AppendLine();
         }
@@ -161,7 +213,7 @@ public static partial class IssueFormatter
         sb.AppendLine("GitGavel verified that this issue has been completed in the codebase and is automatically closing it.");
         sb.AppendLine();
         sb.AppendLine("### 🛠️ How It Was Fixed");
-        sb.AppendLine(c.HowItWasFixed);
+        sb.AppendLine(SanitizeContent(c.HowItWasFixed));
         sb.AppendLine();
 
         sb.AppendLine("### 🔗 Resolving Commits");
@@ -169,7 +221,7 @@ public static partial class IssueFormatter
         {
             foreach (var summary in c.ResolvingCommitSummaries)
             {
-                sb.AppendLine($"- {summary}");
+                sb.AppendLine($"- {SanitizeContent(summary)}");
             }
         }
         else if (c.ResolvingCommitShas.Count > 0)

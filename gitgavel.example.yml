@@ -14,7 +14,6 @@ scope:
 # System 2 Subagents (Generative LLMs)
 subagents:
   apiKeyEnv: "AI_API_KEY" # Env var holding your LLM key (e.g. AI_API_KEY or GEMINI_API_KEY)
-  # apiKey: "your-api-key-here" # Or set directly for local dev (omit in git repos)
   timeoutSeconds: 300     # Global LLM timeout in seconds (default: 300s / 5 mins)
   specDrift:
     enabled: true

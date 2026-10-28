@@ -150,4 +150,75 @@ public class ConfigurationSecurityTests
         var act = () => ConfigLoader.LoadFromString(yaml, allowExternalPaths: true);
         act.Should().NotThrow();
     }
+
+    [Fact]
+    public void LoadFromString_WithDirectApiKeyInSubagents_ThrowsInvalidOperationException()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          apiKey: "AIzaSyD-unauthorized-plain-text-key"
+          apiKeyEnv: "AI_API_KEY"
+        """;
+
+        var act = () => ConfigLoader.LoadFromString(yaml);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Direct API keys in configuration files are forbidden*");
+    }
+
+    [Fact]
+    public void LoadFromString_WithDirectApiKeyInJev_ThrowsInvalidOperationException()
+    {
+        var yaml = """
+        version: 1
+        triage:
+          engine: "jev"
+          jev:
+            apiKey: "jev_sec_key_12345"
+            apiKeyEnv: "JEV_API_KEY"
+        """;
+
+        var act = () => ConfigLoader.LoadFromString(yaml);
+        act.Should().Throw<InvalidOperationException>()
+            .WithMessage("*Direct API keys in configuration files are forbidden*");
+    }
+
+    [Fact]
+    public void LoadFromString_WithApiKeyEnv_Succeeds()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          apiKeyEnv: "CUSTOM_LLM_KEY"
+        triage:
+          engine: "jev"
+          jev:
+            apiKeyEnv: "CUSTOM_JEV_KEY"
+        """;
+
+        var config = ConfigLoader.LoadFromString(yaml);
+        config.Subagents.ApiKeyEnv.Should().Be("CUSTOM_LLM_KEY");
+        config.Triage.Jev.ApiKeyEnv.Should().Be("CUSTOM_JEV_KEY");
+    }
+
+    [Fact]
+    public void LoadFromString_WithCommentedOutApiKey_Succeeds()
+    {
+        var yaml = """
+        version: 1
+        subagents:
+          apiKeyEnv: "AI_API_KEY"
+          # apiKey: "your-api-key-here"
+          #   apiKey: "nested commented key"
+          # api_key: "snake_case commented key"
+        triage:
+          engine: "jev"
+          jev:
+            apiKeyEnv: "JEV_API_KEY"
+            # apiKey: "jev_key_here"
+        """;
+
+        var act = () => ConfigLoader.LoadFromString(yaml);
+        act.Should().NotThrow();
+    }
 }

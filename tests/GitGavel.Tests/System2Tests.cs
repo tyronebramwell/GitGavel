@@ -940,9 +940,11 @@ public class System2Tests
     public async Task GeminiLlmClient_StripsModelsPrefix_WhenBuildingUrl()
     {
         string? requestedUrl = null;
+        IEnumerable<string>? headerValues = null;
         var handler = new SimpleTestHttpMessageHandler(req =>
         {
             requestedUrl = req.RequestUri?.ToString();
+            req.Headers.TryGetValues("x-goog-api-key", out headerValues);
             var json = """
             {
               "candidates": [
@@ -970,6 +972,10 @@ public class System2Tests
         response.Content.Should().Be("{\"findings\": []}");
         requestedUrl.Should().Contain("/models/gemini-3.1-pro-preview:generateContent");
         requestedUrl.Should().NotContain("/models/models/");
+        requestedUrl.Should().NotContain("?key=");
+        requestedUrl.Should().NotContain("test-key");
+        headerValues.Should().NotBeNull();
+        headerValues.Should().ContainSingle().Which.Should().Be("test-key");
     }
 
     private class SimpleTestHttpMessageHandler(Func<HttpRequestMessage, HttpResponseMessage> handler) : HttpMessageHandler

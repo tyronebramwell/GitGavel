@@ -173,18 +173,39 @@ public class GitService : IGitService
 
     public string? RunGitCommand(string workingDirectory, string args)
     {
+        var tokenized = TokenizeArguments(args);
+        return RunGitCommand(workingDirectory, tokenized);
+    }
+
+    public string? RunGitCommand(string workingDirectory, params string[] args)
+    {
+        return RunGitCommand(workingDirectory, (IEnumerable<string>)args);
+    }
+
+    public string? RunGitCommand(string workingDirectory, IEnumerable<string> args)
+    {
         try
         {
             var psi = new ProcessStartInfo
             {
                 FileName = "git",
-                Arguments = $"-c safe.directory=* {args}",
                 WorkingDirectory = workingDirectory,
                 RedirectStandardOutput = true,
                 RedirectStandardError = true,
                 UseShellExecute = false,
                 CreateNoWindow = true
             };
+
+            psi.ArgumentList.Add("-c");
+            psi.ArgumentList.Add("safe.directory=*");
+
+            foreach (var arg in args)
+            {
+                if (!string.IsNullOrEmpty(arg))
+                {
+                    psi.ArgumentList.Add(arg);
+                }
+            }
 
             using var process = Process.Start(psi);
             if (process == null) return null;
@@ -197,5 +218,50 @@ public class GitService : IGitService
         {
             return null;
         }
+    }
+
+    public static List<string> TokenizeArguments(string args)
+    {
+        var list = new List<string>();
+        if (string.IsNullOrWhiteSpace(args)) return list;
+
+        var sb = new System.Text.StringBuilder();
+        bool inQuotes = false;
+        char quoteChar = '\0';
+
+        for (int i = 0; i < args.Length; i++)
+        {
+            char c = args[i];
+            bool isEscaped = i > 0 && args[i - 1] == '\\';
+
+            if ((c == '"' || c == '\'') && (!inQuotes || c == quoteChar) && !isEscaped)
+            {
+                inQuotes = !inQuotes;
+                quoteChar = inQuotes ? c : '\0';
+            }
+            else if (char.IsWhiteSpace(c) && !inQuotes)
+            {
+                if (sb.Length > 0)
+                {
+                    list.Add(sb.ToString());
+                    sb.Clear();
+                }
+            }
+            else
+            {
+                if (isEscaped && (c == '"' || c == '\'') && sb.Length > 0 && sb[^1] == '\\')
+                {
+                    sb.Length--; // Remove escape backslash to preserve literal quote in argument
+                }
+                sb.Append(c);
+            }
+        }
+
+        if (sb.Length > 0)
+        {
+            list.Add(sb.ToString());
+        }
+
+        return list;
     }
 }

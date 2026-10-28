@@ -1,11 +1,15 @@
 using System.Security;
+using System.Text.RegularExpressions;
 using YamlDotNet.Serialization;
 using YamlDotNet.Serialization.NamingConventions;
 
 namespace GitGavel.Configuration;
 
-public static class ConfigLoader
+public static partial class ConfigLoader
 {
+    [GeneratedRegex(@"(?m)^(?!\s*#)\s*(?:apiKey|api_key)\s*:\s*['""]?\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
+    private static partial Regex DirectApiKeyRegex();
+
     private static readonly IDeserializer Deserializer = new DeserializerBuilder()
         .WithNamingConvention(CamelCaseNamingConvention.Instance)
         .IgnoreUnmatchedProperties()
@@ -21,6 +25,11 @@ public static class ConfigLoader
         if (string.IsNullOrWhiteSpace(yamlContent))
         {
             return new GitGavelConfig();
+        }
+
+        if (DirectApiKeyRegex().IsMatch(yamlContent))
+        {
+            throw new InvalidOperationException("Direct API keys in configuration files are forbidden for security reasons. Please use environment variables via 'apiKeyEnv' instead.");
         }
 
         var config = Deserializer.Deserialize<GitGavelConfig>(yamlContent) ?? new GitGavelConfig();

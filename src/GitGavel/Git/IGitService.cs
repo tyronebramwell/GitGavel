@@ -15,4 +15,5 @@ public interface IGitService
     IReadOnlyList<GitCommitRecord> GetRecentCommits(string workingDirectory, int maxCount = 50);
     int? ResolvePullRequestNumber(int? explicitPrNumber = null);
     string? RunGitCommand(string workingDirectory, string args);
+    string? RunGitCommand(string workingDirectory, params string[] args);
 }

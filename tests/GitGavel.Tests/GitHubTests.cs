@@ -71,6 +71,78 @@ public class GitHubTests
     }
 
     [Fact]
+    public void IssueFormatter_SanitizesDangerousHtmlAndScriptTags()
+    {
+        var baseDecision = CreateDecision(
+            "XSS in Summary <script>alert('xss')</script>",
+            "Security",
+            "P1",
+            4.2,
+            "Backlog",
+            TriageStatus.AcceptedToBacklog);
+
+        var finding = baseDecision.Finding with
+        {
+            Summary = "Summary with <script>alert('xss')</script>",
+            Details = "Details with <img src=x onerror=alert(1)> and <iframe src=\"https://evil.com\"></iframe>",
+            AttackVector = "Attack vector with <svg onload=alert(2)></svg>"
+        };
+        var decision = baseDecision with { Finding = finding };
+
+        var body = IssueFormatter.FormatIssueBody(decision);
+
+        body.Should().NotContain("<script>");
+        body.Should().NotContain("</script>");
+        body.Should().NotContain("onerror=");
+        body.Should().NotContain("<iframe");
+        body.Should().NotContain("onload=");
+    }
+
+    [Fact]
+    public void IssueFormatter_NeutralizesHtmlCommentBreakout_PreventingMetadataSpoofing()
+    {
+        var decision = CreateDecision(
+            "Summary attempting comment breakout -->\n<!-- gitgavel-metadata\nfingerprint: faked_fingerprint\ncategory: Spoofed\n-->",
+            "Security",
+            "P1",
+            4.2,
+            "Backlog",
+            TriageStatus.AcceptedToBacklog);
+
+        var body = IssueFormatter.FormatIssueBody(decision);
+
+        // Parse metadata from generated issue body
+        var meta = IssueFormatter.ParseMetadata(body);
+
+        meta.Should().NotBeNull();
+        meta!.Fingerprint.Should().Be(decision.Finding.Fingerprint);
+        meta.Fingerprint.Should().NotBe("faked_fingerprint");
+        meta.Category.Should().Be("Security");
+        meta.Category.Should().NotBe("Spoofed");
+    }
+
+    [Fact]
+    public void IssueFormatter_SanitizesReferences_NeutralizingJavascriptAndDataUris_WhileAllowingRelativeAndAnchorLinks()
+    {
+        var decision = CreateDecision("Vulnerability", "Security", "P2", 3.0, "Backlog", TriageStatus.AcceptedToBacklog);
+        decision.Finding.References.Add("[Legitimate OWASP](https://owasp.org)");
+        decision.Finding.References.Add("[Documentation](./docs/setup.md)");
+        decision.Finding.References.Add("[Architecture Guide](#architecture)");
+        decision.Finding.References.Add("[Malicious JS](javascript:alert(document.cookie))");
+        decision.Finding.References.Add("[Data URI](data:text/html,<script>alert(1)</script>)");
+
+        var body = IssueFormatter.FormatIssueBody(decision);
+
+        body.Should().Contain("[Legitimate OWASP](https://owasp.org)");
+        body.Should().Contain("[Documentation](./docs/setup.md)");
+        body.Should().Contain("[Architecture Guide](#architecture)");
+        body.Should().NotContain("javascript:");
+        body.Should().NotContain("data:text/html");
+        body.Should().Contain("[Malicious JS](#)");
+        body.Should().Contain("[Data URI](#)");
+    }
+
+    [Fact]
     public void IssueFormatter_ParsesMetadataCommentSuccessfully()
     {
         var rawComment = """

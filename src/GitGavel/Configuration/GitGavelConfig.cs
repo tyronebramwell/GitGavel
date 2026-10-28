@@ -37,7 +37,6 @@ public class TestsScopeConfig
 public class SubagentsConfig
 {
     public string ApiKeyEnv { get; set; } = "AI_API_KEY";
-    public string? ApiKey { get; set; }
     public int TimeoutSeconds { get; set; } = 300;
 
     public SubagentSettings SpecDrift { get; set; } = new()
@@ -130,7 +129,6 @@ public class SubagentGatingConfig
 public class JevConfig
 {
     public string ApiKeyEnv { get; set; } = "JEV_API_KEY";
-    public string? ApiKey { get; set; }
     public JevThresholds Thresholds { get; set; } = new();
     public bool DedupeWithNoul { get; set; } = true;
 }
