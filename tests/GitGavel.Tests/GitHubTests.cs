@@ -3,6 +3,7 @@ using GitGavel.Configuration;
 using GitGavel.GitHub;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
+using Moq;
 
 namespace GitGavel.Tests;
 
@@ -756,5 +757,474 @@ public class GitHubTests
 
         mock.PostedPrComments.Should().ContainSingle();
         mock.PostedPrComments[0].CommentBody.Should().Contain("Updated report");
+    }
+
+    [Theory]
+    [InlineData("Backlog", "CustomBacklog")]
+    [InlineData("NeedsHumanReview", "CustomHumanReview")]
+    [InlineData("Done", "CustomDone")]
+    [InlineData("Discard", "CustomDiscard")]
+    public async Task MockGitHubService_AssignToProjectV2Async_MapsAllFourColumnsCorrectly(string targetColumn, string expectedColumn)
+    {
+        var mock = new MockGitHubService();
+        var config = new GitGavelConfig();
+        config.Github.ProjectsV2.Columns.Backlog = "CustomBacklog";
+        config.Github.ProjectsV2.Columns.HumanReview = "CustomHumanReview";
+        config.Github.ProjectsV2.Columns.Done = "CustomDone";
+        config.Github.ProjectsV2.Columns.Discard = "CustomDiscard";
+
+        var decision = CreateDecision("Column Mapping Test", "Refactoring", "P2", 3.0, targetColumn, TriageStatus.AcceptedToBacklog);
+        var created = new CreatedIssueResult(10, "MDU6SXNzdWUxMA==", "Column Mapping Test", "https://github.com/org/repo/issues/10", false);
+
+        await mock.AssignToProjectV2Async("org", "repo", created, decision, config);
+
+        mock.ProjectAssignments.Should().ContainSingle();
+        mock.ProjectAssignments[0].Column.Should().Be(expectedColumn);
+    }
+
+    [Fact]
+    public void IssueFormatter_UnderCommaDecimalCulture_FormatsAndParsesMetadataWithInvariantPeriodSeparator()
+    {
+        var prevCulture = System.Globalization.CultureInfo.CurrentCulture;
+        try
+        {
+            System.Globalization.CultureInfo.CurrentCulture = new System.Globalization.CultureInfo("fr-FR");
+
+            var decision = CreateDecision("Culture Test", "Security", "P1", 4.25, "Backlog", TriageStatus.AcceptedToBacklog) with
+            {
+                Confidence = 0.875
+            };
+
+            var body = IssueFormatter.FormatIssueBody(decision);
+            body.Should().Contain("jev_score: 4.2");
+            body.Should().Contain("jev_confidence: 0.88");
+
+            var parsed = IssueFormatter.ParseMetadata(body);
+            parsed.Should().NotBeNull();
+            parsed!.JevScore.Should().Be(4.2);
+            parsed.JevConfidence.Should().Be(0.88);
+
+            var resDecision = new IssueResolutionDecision
+            {
+                Candidate = new IssueResolutionCandidate
+                {
+                    IssueNumber = 50,
+                    IssueTitle = "Fix Culture Bug",
+                    IsResolved = true,
+                    HowItWasFixed = "Used CultureInfo.InvariantCulture",
+                    ResolvingCommitShas = ["abc123456789"]
+                },
+                VerifiedResolved = true,
+                ResolutionProbability = 0.94,
+                Action = IssueResolutionAction.CloseResolved
+            };
+
+            var resComment = IssueFormatter.FormatIssueResolutionComment(resDecision);
+            resComment.Should().Contain("jev_resolution_confidence: 0.94");
+
+            var parsedRes = IssueFormatter.ParseResolutionMetadata(resComment);
+            parsedRes.Should().NotBeNull();
+            parsedRes!.JevResolutionConfidence.Should().Be(0.94);
+        }
+        finally
+        {
+            System.Globalization.CultureInfo.CurrentCulture = prevCulture;
+        }
+    }
+
+    [Fact]
+    public void IssueFormatter_FormatAndParseResolutionMetadata_HandlesEmptyCommitsAndMissingMetadata()
+    {
+        var decision = new IssueResolutionDecision
+        {
+            Candidate = new IssueResolutionCandidate
+            {
+                IssueNumber = 12,
+                IssueTitle = "No Commits Listed",
+                IsResolved = true,
+                HowItWasFixed = "Fixed directly",
+                ResolvingCommitShas = [],
+                ResolvingCommitSummaries = []
+            },
+            VerifiedResolved = true,
+            ResolutionProbability = 0.91
+        };
+
+        var comment = IssueFormatter.FormatIssueResolutionComment(decision);
+        comment.Should().Contain("_Verified against current repository state_");
+
+        var meta = IssueFormatter.ParseResolutionMetadata(comment);
+        meta.Should().NotBeNull();
+        meta!.ResolvedByCommits.Should().BeEmpty();
+        meta.JevResolutionConfidence.Should().Be(0.91);
+
+        IssueFormatter.ParseResolutionMetadata("").Should().BeNull();
+        IssueFormatter.ParseResolutionMetadata("No comment block here").Should().BeNull();
+        IssueFormatter.ParseMetadata("").Should().BeNull();
+    }
+
+    [Fact]
+    public async Task GitHubService_AssignToProjectV2Async_ExecutesFullGraphQlFlowAndSendsPerRequestBearerHeader()
+    {
+        var capturedRequests = new List<(string? AuthHeader, string Body)>();
+        var handler = new DelegateHttpMessageHandler(async (req, ct) =>
+        {
+            var auth = req.Headers.Authorization?.ToString();
+            var body = await req.Content!.ReadAsStringAsync(ct);
+            capturedRequests.Add((auth, body));
+
+            string responseJson;
+            if (body.Contains("projectV2(number:"))
+            {
+                responseJson = """
+                {
+                  "data": {
+                    "organization": {
+                      "projectV2": {
+                        "id": "PVT_proj1",
+                        "fields": {
+                          "nodes": [
+                            {
+                              "id": "PVTSSF_status",
+                              "name": "Status",
+                              "options": [
+                                { "id": "OPT_backlog", "name": "Backlog" },
+                                { "id": "OPT_done", "name": "Done" }
+                              ]
+                            },
+                            {
+                              "id": "PVTSSF_prio",
+                              "name": "Priority",
+                              "options": [
+                                { "id": "OPT_p1", "name": "P1" }
+                              ]
+                            }
+                          ]
+                        }
+                      }
+                    }
+                  }
+                }
+                """;
+            }
+            else if (body.Contains("addProjectV2ItemById"))
+            {
+                responseJson = """
+                {
+                  "data": {
+                    "addProjectV2ItemById": {
+                      "item": { "id": "PVTI_item1" }
+                    }
+                  }
+                }
+                """;
+            }
+            else
+            {
+                responseJson = """{ "data": { "updateProjectV2ItemFieldValue": { "projectV2Item": { "id": "PVTI_item1" } } } }""";
+            }
+
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(responseJson, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var service = new GitHubService("ghp_test_token", new System.Net.Http.HttpClient(handler));
+        var config = new GitGavelConfig();
+        var decision = CreateDecision("GraphQL Test", "Security", "P1", 4.2, "Backlog", TriageStatus.AcceptedToBacklog);
+        var created = new CreatedIssueResult(42, "I_kwDO123", "GraphQL Test", "https://github.com/org/repo/issues/42", false);
+
+        await service.AssignToProjectV2Async("org", "repo", created, decision, config);
+
+        // 4 GraphQL calls: 1) query project, 2) addProjectV2ItemById, 3) update Status field, 4) update Priority field
+        capturedRequests.Should().HaveCount(4);
+        capturedRequests.Should().OnlyContain(r => r.AuthHeader == "Bearer ghp_test_token");
+        capturedRequests[1].Body.Should().Contain("addProjectV2ItemById");
+        capturedRequests[2].Body.Should().Contain("OPT_backlog");
+        capturedRequests[3].Body.Should().Contain("OPT_p1");
+    }
+
+    [Fact]
+    public async Task GitHubService_AssignToProjectV2Async_WhenGraphQlReturnsErrorsOrHttp500_HandlesGracefullyWithoutThrowing()
+    {
+        var return500 = true;
+        var handler = new DelegateHttpMessageHandler((_, _) =>
+        {
+            if (return500)
+            {
+                return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError)
+                {
+                    Content = new System.Net.Http.StringContent("Internal Error")
+                });
+            }
+
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent("""{ "errors": [{ "message": "Resource not accessible by integration" }] }""", System.Text.Encoding.UTF8, "application/json")
+            });
+        });
+
+        using var service = new GitHubService("ghp_test_token", new System.Net.Http.HttpClient(handler));
+        var config = new GitGavelConfig();
+        var decision = CreateDecision("GraphQL Error Test", "Security", "P1", 4.2, "Backlog", TriageStatus.AcceptedToBacklog);
+        var created = new CreatedIssueResult(42, "I_kwDO123", "GraphQL Error Test", "https://github.com/org/repo/issues/42", false);
+
+        // 1. HTTP 500 does not throw
+        var act1 = () => service.AssignToProjectV2Async("org", "repo", created, decision, config);
+        await act1.Should().NotThrowAsync();
+
+        // 2. GraphQL errors array does not throw
+        return500 = false;
+        var act2 = () => service.AssignToProjectV2Async("org", "repo", created, decision, config);
+        await act2.Should().NotThrowAsync();
+    }
+
+    [Fact]
+    public async Task GitHubService_WithInjectedGitHubClient_HandlesApiExceptionAndIssueOperations()
+    {
+        var mockClient = new Mock<Octokit.IGitHubClient>();
+        var mockIssues = new Mock<Octokit.IIssuesClient>();
+        var mockComments = new Mock<Octokit.IIssueCommentsClient>();
+
+        mockClient.SetupGet(c => c.Issue).Returns(mockIssues.Object);
+        mockIssues.SetupGet(i => i.Comment).Returns(mockComments.Object);
+
+        // When GetAllForRepository throws ApiException, GetExistingIssuesAsync returns empty list and invokes onWarning
+        mockIssues
+            .Setup(i => i.GetAllForRepository(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<Octokit.RepositoryIssueRequest>(),
+                It.IsAny<Octokit.ApiOptions>()))
+            .ThrowsAsync(new Octokit.ApiException("Secondary rate limit", System.Net.HttpStatusCode.Forbidden));
+
+        string? warningMsg = null;
+        using var service = new GitHubService("ghp_token", githubClient: mockClient.Object, onWarning: msg => warningMsg = msg);
+
+        var issues = await service.GetExistingIssuesAsync("org", "repo");
+        issues.Should().BeEmpty();
+        warningMsg.Should().Contain("Secondary rate limit");
+
+        // When GetAllForRepository throws TaskCanceledException, it propagates instead of being swallowed
+        mockIssues
+            .Setup(i => i.GetAllForRepository(
+                It.IsAny<string>(),
+                It.IsAny<string>(),
+                It.IsAny<Octokit.RepositoryIssueRequest>(),
+                It.IsAny<Octokit.ApiOptions>()))
+            .ThrowsAsync(new TaskCanceledException("Operation canceled by user"));
+
+        var cancelAct = () => service.GetExistingIssuesAsync("org", "repo");
+        await cancelAct.Should().ThrowAsync<TaskCanceledException>();
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SyncNodeToProjectV2Async_WhenMissingTokenDisabledOrEmptyNodeId_ReturnsEarlyWithoutHttpCalls()
+    {
+        var callCount = 0;
+        var handler = new DelegateHttpMessageHandler((_, _) =>
+        {
+            callCount++;
+            return Task.FromResult(new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        });
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+
+        // 1. Empty token
+        var emptyTokenClient = new GitHubProjectsV2Client(httpClient, "");
+        await emptyTokenClient.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", new ProjectsV2Config { Enabled = true });
+        callCount.Should().Be(0);
+
+        // 2. Disabled in config
+        var validClient = new GitHubProjectsV2Client(httpClient, "ghp_token");
+        await validClient.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", new ProjectsV2Config { Enabled = false });
+        callCount.Should().Be(0);
+
+        // 3. Empty contentNodeId
+        await validClient.SyncNodeToProjectV2Async("org", "   ", "Backlog", "P1", new ProjectsV2Config { Enabled = true });
+        callCount.Should().Be(0);
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SyncNodeToProjectV2Async_WhenProjectIdOrItemIdMissing_StopsEarlyWithoutFieldMutations()
+    {
+        var capturedBodies = new List<string>();
+        var responseQueue = new Queue<string>();
+
+        var handler = new DelegateHttpMessageHandler(async (req, ct) =>
+        {
+            capturedBodies.Add(await req.Content!.ReadAsStringAsync(ct));
+            var json = responseQueue.Count > 0 ? responseQueue.Dequeue() : "{}";
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+        var client = new GitHubProjectsV2Client(httpClient, "ghp_token");
+        var config = new ProjectsV2Config { Enabled = true, ProjectNumber = 1 };
+
+        // Case 1: Missing projectId (projectV2 has id: null) -> returns after 1st GraphQL call
+        responseQueue.Enqueue("""{ "data": { "user": { "projectV2": { "id": null } } } }""");
+        await client.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", config);
+        capturedBodies.Should().HaveCount(1);
+
+        // Case 2: Valid projectId, but addProjectV2ItemById returns item: { id: null } -> stops after 2nd GraphQL call
+        capturedBodies.Clear();
+        responseQueue.Enqueue("""{ "data": { "user": { "projectV2": { "id": "PVT_1", "fields": { "nodes": [] } } } } }""");
+        responseQueue.Enqueue("""{ "data": { "addProjectV2ItemById": { "item": { "id": null } } } }""");
+        await client.SyncNodeToProjectV2Async("org", "nodeId", "Backlog", "P1", config);
+        capturedBodies.Should().HaveCount(2);
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SyncNodeToProjectV2Async_WhenFieldsOrOptionsMissing_SkipsFieldUpdateMutations()
+    {
+        var capturedBodies = new List<string>();
+        var responseQueue = new Queue<string>();
+
+        var handler = new DelegateHttpMessageHandler(async (req, ct) =>
+        {
+            capturedBodies.Add(await req.Content!.ReadAsStringAsync(ct));
+            var json = responseQueue.Count > 0 ? responseQueue.Dequeue() : "{}";
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent(json, System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+        var client = new GitHubProjectsV2Client(httpClient, "ghp_token");
+        var config = new ProjectsV2Config { Enabled = true, ProjectNumber = 1 };
+
+        // Project has Status & Priority fields, but option "NonExistentColumn" and "P99" are not in options list
+        responseQueue.Enqueue("""
+        {
+          "data": {
+            "organization": {
+              "projectV2": {
+                "id": "PVT_proj1",
+                "fields": {
+                  "nodes": [
+                    {
+                      "id": "PVTSSF_status",
+                      "name": "Status",
+                      "options": [{ "id": "OPT_backlog", "name": "Backlog" }]
+                    },
+                    {
+                      "id": "PVTSSF_prio",
+                      "name": "Priority",
+                      "options": [{ "id": "OPT_p0", "name": "P0" }]
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+        """);
+        responseQueue.Enqueue("""{ "data": { "addProjectV2ItemById": { "item": { "id": "PVTI_item1" } } } }""");
+
+        await client.SyncNodeToProjectV2Async("org", "nodeId", "NonExistentColumn", "P99", config);
+
+        // Only 2 calls made (query + addItem), 0 updateProjectV2ItemFieldValue calls made
+        capturedBodies.Should().HaveCount(2);
+        capturedBodies.Should().NotContain(b => b.Contains("updateProjectV2ItemFieldValue"));
+    }
+
+    [Fact]
+    public void GitHubProjectsV2Client_TryExtractProjectElement_HandlesUserOrganizationAndMissingData()
+    {
+        using var userDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "user": { "projectV2": { "id": "PVT_user" } } } }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(userDoc.RootElement, out var userProj).Should().BeTrue();
+        userProj.GetProperty("id").GetString().Should().Be("PVT_user");
+
+        using var orgDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "organization": { "projectV2": { "id": "PVT_org" } } } }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(orgDoc.RootElement, out var orgProj).Should().BeTrue();
+        orgProj.GetProperty("id").GetString().Should().Be("PVT_org");
+
+        using var emptyDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "user": null, "organization": null } }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(emptyDoc.RootElement, out _).Should().BeFalse();
+
+        using var noDataDoc = System.Text.Json.JsonDocument.Parse("""{ "errors": [] }""");
+        GitHubProjectsV2Client.TryExtractProjectElement(noDataDoc.RootElement, out _).Should().BeFalse();
+    }
+
+    [Fact]
+    public void GitHubProjectsV2Client_FindOptionId_MatchesCaseInsensitivelyAndReturnsNullWhenMissing()
+    {
+        using var fieldDoc = System.Text.Json.JsonDocument.Parse("""
+        {
+          "id": "PVTSSF_1",
+          "name": "Status",
+          "options": [
+            { "id": "OPT_1", "name": "Backlog" },
+            { "id": "OPT_2", "name": "Done" }
+          ]
+        }
+        """);
+
+        GitHubProjectsV2Client.FindOptionId(fieldDoc.RootElement, "backlog").Should().Be("OPT_1");
+        GitHubProjectsV2Client.FindOptionId(fieldDoc.RootElement, "DONE").Should().Be("OPT_2");
+        GitHubProjectsV2Client.FindOptionId(fieldDoc.RootElement, "NonExistent").Should().BeNull();
+
+        using var noOptionsDoc = System.Text.Json.JsonDocument.Parse("""{ "id": "PVTSSF_2", "name": "TextField" }""");
+        GitHubProjectsV2Client.FindOptionId(noOptionsDoc.RootElement, "Backlog").Should().BeNull();
+    }
+
+    [Fact]
+    public void GitHubProjectsV2Client_HasGraphQLErrors_ExtractsFirstMessageOrReturnsFalseWhenNoErrors()
+    {
+        using var okDoc = System.Text.Json.JsonDocument.Parse("""{ "data": { "viewer": { "login": "octocat" } } }""");
+        GitHubProjectsV2Client.HasGraphQLErrors(okDoc.RootElement, out var noErr).Should().BeFalse();
+        noErr.Should().BeEmpty();
+
+        using var errDoc = System.Text.Json.JsonDocument.Parse("""{ "errors": [{ "message": "Field 'projectV2' doesn't exist" }] }""");
+        GitHubProjectsV2Client.HasGraphQLErrors(errDoc.RootElement, out var msg).Should().BeTrue();
+        msg.Should().Be("Field 'projectV2' doesn't exist");
+
+        using var rawErrDoc = System.Text.Json.JsonDocument.Parse("""{ "errors": ["Raw error string"] }""");
+        GitHubProjectsV2Client.HasGraphQLErrors(rawErrDoc.RootElement, out var rawMsg).Should().BeTrue();
+        rawMsg.Should().Contain("Raw error string");
+    }
+
+    [Fact]
+    public async Task GitHubProjectsV2Client_SetProjectFieldAsyncAndExecuteGraphQLAsync_SendsCorrectGraphQlPayloadAndHeaders()
+    {
+        string? capturedBody = null;
+        string? capturedAuth = null;
+        string? capturedUserAgent = null;
+
+        var handler = new DelegateHttpMessageHandler(async (req, ct) =>
+        {
+            capturedAuth = req.Headers.Authorization?.ToString();
+            capturedUserAgent = req.Headers.UserAgent.ToString();
+            capturedBody = await req.Content!.ReadAsStringAsync(ct);
+
+            return new System.Net.Http.HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = new System.Net.Http.StringContent("""{ "data": { "updateProjectV2ItemFieldValue": { "projectV2Item": { "id": "PVTI_1" } } } }""", System.Text.Encoding.UTF8, "application/json")
+            };
+        });
+
+        using var httpClient = new System.Net.Http.HttpClient(handler);
+        var client = new GitHubProjectsV2Client(httpClient, "ghp_direct_token");
+
+        await client.SetProjectFieldAsync("PVT_proj", "PVTI_item", "PVTSSF_field", "OPT_val");
+
+        capturedAuth.Should().Be("Bearer ghp_direct_token");
+        capturedUserAgent.Should().Contain("GitGavel/1.0");
+        capturedBody.Should().Contain("updateProjectV2ItemFieldValue");
+        capturedBody.Should().Contain("PVT_proj");
+        capturedBody.Should().Contain("PVTI_item");
+        capturedBody.Should().Contain("PVTSSF_field");
+        capturedBody.Should().Contain("OPT_val");
+    }
+
+    private sealed class DelegateHttpMessageHandler(Func<System.Net.Http.HttpRequestMessage, CancellationToken, Task<System.Net.Http.HttpResponseMessage>> handler) : System.Net.Http.HttpMessageHandler
+    {
+        protected override Task<System.Net.Http.HttpResponseMessage> SendAsync(System.Net.Http.HttpRequestMessage request, CancellationToken cancellationToken)
+            => handler(request, cancellationToken);
     }
 }

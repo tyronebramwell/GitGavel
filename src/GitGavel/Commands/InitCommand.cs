@@ -13,11 +13,28 @@ public class InitCommand : Command<InitCommand.Settings>
         [CommandOption("-f|--force")]
         [Description("Overwrite existing .gitgavel.yml if present.")]
         public bool Force { get; set; }
+
+        [CommandOption("-d|--dir <DIR>")]
+        [Description("Target directory in which to create .gitgavel.yml (defaults to current directory).")]
+        [DefaultValue(".")]
+        public string TargetDirectory { get; set; } = ".";
     }
 
     public override int Execute([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
     {
-        const string targetFile = ".gitgavel.yml";
+        var rawDir = string.IsNullOrWhiteSpace(settings.TargetDirectory) ? "." : settings.TargetDirectory;
+        if (rawDir.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Contains(".."))
+        {
+            AnsiConsole.MarkupLine("[red]✗[/] Invalid target directory: path traversal ('..') is not allowed.");
+            return 1;
+        }
+
+        var resolvedDir = Path.GetFullPath(rawDir);
+        PathSecurity.ValidateRootDirectory(resolvedDir);
+        var targetFile = PathSecurity.ResolveAndVerifyWithinRoot(
+            Path.Combine(resolvedDir, ".gitgavel.yml"),
+            resolvedDir,
+            allowExternal: false);
 
         if (File.Exists(targetFile) && !settings.Force)
         {

@@ -31,132 +31,93 @@ public class MockTriageEngine : ITriageEngine
         }
 
         var gatingConfig = config.Triage.SubagentGating;
-        var decisions = new List<SubagentGatingDecision>();
+        var signals = GatingSignals.FromRepoContext(context);
 
-        if (!gatingConfig.Enabled || (gatingConfig.BypassInFullRepoMode && !context.IsPullRequestMode))
+        var bypassResult = TriageEngineHelper.TryEvaluateGlobalGatingBypass(signals, candidateAgentNames, gatingConfig);
+        if (bypassResult != null)
         {
-            foreach (var name in candidateAgentNames)
-            {
-                decisions.Add(new SubagentGatingDecision(
-                    name,
-                    ShouldRun: true,
-                    Confidence: 1.0,
-                    Reason: !gatingConfig.Enabled ? "Subagent gating disabled in configuration." : "Subagent gating bypassed in full repository audit mode.",
-                    IsDeterministicOverride: true));
-            }
-            return Task.FromResult(new SubagentGatingResult(decisions, EstimatedTokensSaved: 0));
+            return Task.FromResult(bypassResult);
         }
 
-        var hasSpecChanges = context.IsPullRequestMode
-            ? context.SpecFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch)) || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase) && !string.IsNullOrEmpty(f.DiffPatch))
-            : context.SpecFiles.Count > 0 || context.SourceFiles.Any(f => f.RelativePath.EndsWith(".md", StringComparison.OrdinalIgnoreCase));
-        var hasSourceCodeChanges = context.IsPullRequestMode
-            ? context.SourceFiles.Any(f => !f.IsTest && !string.IsNullOrEmpty(f.DiffPatch))
-            : context.SourceFiles.Any(f => !f.IsTest);
-        var hasTestChanges = context.IsPullRequestMode
-            ? context.TestFiles.Any(f => !string.IsNullOrEmpty(f.DiffPatch))
-            : context.TestFiles.Count > 0;
-        var hasSarif = context.SarifFindings.Count > 0;
-        var hasComplexity = context.AstSummaries.Any(a => a.TotalComplexityScore >= 15 || a.IsComplexityHotspot);
+        var decisions = new List<SubagentGatingDecision>();
 
         foreach (var name in candidateAgentNames)
         {
-            bool shouldRun;
-            double confidence;
-            string reason;
-            bool isOverride = false;
+            var overrideDecision = TriageEngineHelper.TryEvaluateDeterministicOverride(
+                name,
+                signals,
+                gatingConfig,
+                specOverrideConfidence: 0.95,
+                complexityOverrideConfidence: 0.92);
 
-            switch (name)
+            if (overrideDecision != null)
             {
-                case "SpecDriftAgent":
-                    if (gatingConfig.AlwaysRunSpecDriftOnSpecChanges && hasSpecChanges)
-                    {
-                        shouldRun = true;
-                        confidence = 0.95;
-                        reason = context.IsPullRequestMode
-                            ? "Specification documents modified in diff."
-                            : "Specification documents present in repository.";
-                        isOverride = true;
-                    }
-                    else
-                    {
-                        shouldRun = hasSpecChanges;
-                        confidence = shouldRun ? 0.90 : 0.15;
-                        reason = shouldRun
-                            ? (context.IsPullRequestMode ? "Spec files or documentation modified." : "Spec files present in repository.")
-                            : (context.IsPullRequestMode ? "No specification files or API docs modified." : "No specification files found in repository scope.");
-                    }
-                    break;
-
-                case "SecurityAuditor":
-                    if (gatingConfig.AlwaysRunSecurityOnSarifAlerts && hasSarif)
-                    {
-                        shouldRun = true;
-                        confidence = 1.0;
-                        reason = $"Deterministic override: {context.SarifFindings.Count} SARIF static alerts loaded.";
-                        isOverride = true;
-                    }
-                    else
-                    {
-                        // In mock mode, check if code files have security-relevant paths or auth
-                        var securityPaths = context.SourceFiles.Any(f => f.RelativePath.Contains("Auth", StringComparison.OrdinalIgnoreCase) ||
-                                                                        f.RelativePath.Contains("Security", StringComparison.OrdinalIgnoreCase) ||
-                                                                        f.RelativePath.Contains("Key", StringComparison.OrdinalIgnoreCase));
-                        shouldRun = hasSourceCodeChanges && (securityPaths || hasSarif);
-                        confidence = shouldRun ? 0.88 : 0.20;
-                        reason = shouldRun
-                            ? "Security-sensitive paths or SARIF alerts detected."
-                            : "No security-sensitive changes or alerts detected.";
-                    }
-                    break;
-
-                case "ReliabilityAgent":
-                    shouldRun = hasSourceCodeChanges;
-                    confidence = shouldRun ? 0.85 : 0.10;
-                    reason = shouldRun
-                        ? (context.IsPullRequestMode ? "Production source code modified." : "Production source code present in repository.")
-                        : (context.IsPullRequestMode ? "No production source code modified in diff." : "No production source code found in repository.");
-                    break;
-
-                case "RefactoringAgent":
-                    if (hasComplexity)
-                    {
-                        shouldRun = true;
-                        confidence = 0.92;
-                        reason = "Deterministic override: Roslyn cyclomatic complexity >= 15 detected.";
-                        isOverride = true;
-                    }
-                    else
-                    {
-                        shouldRun = hasSourceCodeChanges;
-                        confidence = shouldRun ? 0.75 : 0.20;
-                        reason = shouldRun
-                            ? (context.IsPullRequestMode ? "Source code files modified." : "Source code files present in repository.")
-                            : (context.IsPullRequestMode ? "No structural code churn detected." : "No source files found in repository.");
-                    }
-                    break;
-
-                case "TestSentinelAgent":
-                    shouldRun = hasSourceCodeChanges || hasTestChanges;
-                    confidence = shouldRun ? 0.90 : 0.15;
-                    reason = shouldRun
-                        ? (context.IsPullRequestMode ? "Source or test files modified." : "Source or test files present in repository.")
-                        : (context.IsPullRequestMode ? "No test or production code changes." : "No source or test files found in repository.");
-                    break;
-
-                default:
-                    shouldRun = true;
-                    confidence = 0.80;
-                    reason = "Standard agent dispatch.";
-                    break;
+                decisions.Add(overrideDecision);
+                continue;
             }
 
-            decisions.Add(new SubagentGatingDecision(name, shouldRun, confidence, reason, isOverride));
+            decisions.Add(EvaluateMockAgentHeuristic(name, signals));
         }
 
-        var skippedCount = decisions.Count(d => !d.ShouldRun);
-        var tokensSaved = skippedCount * 5000L;
-        return Task.FromResult(new SubagentGatingResult(decisions, tokensSaved));
+        return Task.FromResult(TriageEngineHelper.BuildGatingResult(decisions));
+    }
+
+    private static SubagentGatingDecision EvaluateMockAgentHeuristic(string agentName, GatingSignals signals)
+    {
+        bool shouldRun;
+        double confidence;
+        string reason;
+
+        switch (agentName)
+        {
+            case "SpecDriftAgent":
+                shouldRun = signals.HasSpecChanges;
+                confidence = shouldRun ? 0.90 : 0.15;
+                reason = shouldRun
+                    ? (signals.IsPullRequestMode ? "Spec files or documentation modified." : "Spec files present in repository.")
+                    : (signals.IsPullRequestMode ? "No specification files or API docs modified." : "No specification files found in repository scope.");
+                break;
+
+            case "SecurityAuditor":
+                shouldRun = signals.HasSourceCodeChanges && (signals.HasSecuritySensitivePaths || signals.HasSarifAlerts);
+                confidence = shouldRun ? 0.88 : 0.20;
+                reason = shouldRun
+                    ? "Security-sensitive paths or SARIF alerts detected."
+                    : "No security-sensitive changes or alerts detected.";
+                break;
+
+            case "ReliabilityAgent":
+                shouldRun = signals.HasSourceCodeChanges;
+                confidence = shouldRun ? 0.85 : 0.10;
+                reason = shouldRun
+                    ? (signals.IsPullRequestMode ? "Production source code modified." : "Production source code present in repository.")
+                    : (signals.IsPullRequestMode ? "No production source code modified in diff." : "No production source code found in repository.");
+                break;
+
+            case "RefactoringAgent":
+                shouldRun = signals.HasSourceCodeChanges;
+                confidence = shouldRun ? 0.75 : 0.20;
+                reason = shouldRun
+                    ? (signals.IsPullRequestMode ? "Source code files modified." : "Source code files present in repository.")
+                    : (signals.IsPullRequestMode ? "No structural code churn detected." : "No source files found in repository.");
+                break;
+
+            case "TestSentinelAgent":
+                shouldRun = signals.HasSourceCodeChanges || signals.HasTestChanges;
+                confidence = shouldRun ? 0.90 : 0.15;
+                reason = shouldRun
+                    ? (signals.IsPullRequestMode ? "Source or test files modified." : "Source or test files present in repository.")
+                    : (signals.IsPullRequestMode ? "No test or production code changes." : "No source or test files found in repository.");
+                break;
+
+            default:
+                shouldRun = true;
+                confidence = 0.80;
+                reason = "Standard agent dispatch.";
+                break;
+        }
+
+        return new SubagentGatingDecision(agentName, shouldRun, confidence, reason);
     }
 
     public Task<TriageDecision> EvaluateFindingAsync(
@@ -170,14 +131,7 @@ public class MockTriageEngine : ITriageEngine
             var match = existingIssues.FirstOrDefault(i => i.Title.Contains(finding.Title, StringComparison.OrdinalIgnoreCase) ||
                                                            i.Body.Contains(finding.FilePath, StringComparison.OrdinalIgnoreCase));
             var (isDup, prob, score, choice) = _customEvaluator(finding, match);
-
-            var prio = score switch
-            {
-                >= 4.5 => "P0",
-                >= 3.5 => "P1",
-                >= 2.5 => "P2",
-                _ => "P3"
-            };
+            var prio = TriageEngineHelper.MapScoreToPriority(score);
 
             var stat = isDup ? TriageStatus.SuppressedDuplicate :
                 choice == "Backlog" ? TriageStatus.AcceptedToBacklog :
@@ -199,7 +153,6 @@ public class MockTriageEngine : ITriageEngine
             });
         }
 
-        // Default heuristic simulation
         var duplicate = existingIssues.FirstOrDefault(i =>
             i.Title.Equals(finding.Title, StringComparison.OrdinalIgnoreCase) ||
             (i.Body.Contains(finding.FilePath, StringComparison.OrdinalIgnoreCase) && i.Title.Contains(finding.Category, StringComparison.OrdinalIgnoreCase)));
@@ -229,7 +182,7 @@ public class MockTriageEngine : ITriageEngine
             _ => 2.0
         };
 
-        var priority = scoreVal >= 4.5 ? "P0" : scoreVal >= 3.5 ? "P1" : scoreVal >= 2.5 ? "P2" : "P3";
+        var priority = TriageEngineHelper.MapScoreToPriority(scoreVal);
 
         return Task.FromResult(new TriageDecision
         {
@@ -259,36 +212,7 @@ public class MockTriageEngine : ITriageEngine
             decisions.Add(d);
         }
 
-        var cappedCandidates = decisions
-            .Where(d => d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
-                        d.PriorityLabel == "P3")
-            .ToList();
-
-        if (cappedCandidates.Count > config.Triage.MaxIssuesPerRun)
-        {
-            var topAllowed = cappedCandidates
-                .OrderByDescending(d => d.JevScore)
-                .ThenByDescending(d => d.Confidence)
-                .Take(config.Triage.MaxIssuesPerRun)
-                .ToHashSet();
-
-            for (var i = 0; i < decisions.Count; i++)
-            {
-                var d = decisions[i];
-                if (d.Status is TriageStatus.AcceptedToBacklog or TriageStatus.RoutedToHumanReview &&
-                    d.PriorityLabel == "P3" &&
-                    !topAllowed.Contains(d))
-                {
-                    decisions[i] = d with
-                    {
-                        Status = TriageStatus.DiscardedNoise,
-                        TargetColumn = "Discard",
-                        Reason = $"Deferred: maxIssuesPerRun cap ({config.Triage.MaxIssuesPerRun}) reached for P3 findings (P0–P2 exempt)."
-                    };
-                }
-            }
-        }
-
+        TriageEngineHelper.EnforceMaxIssuesPerRunCap(decisions, config.Triage.MaxIssuesPerRun);
         return decisions;
     }
 
@@ -333,7 +257,7 @@ public class MockTriageEngine : ITriageEngine
                 _ => 2.0
             };
 
-            var prio = score >= 4.5 ? "P0" : score >= 3.5 ? "P1" : score >= 2.5 ? "P2" : "P3";
+            var prio = TriageEngineHelper.MapScoreToPriority(score);
             var action = score >= 2.5 ? PrCommentAction.PostInlineReview : PrCommentAction.Discard;
 
             decisions.Add(new PrCommentTriageDecision
@@ -349,25 +273,7 @@ public class MockTriageEngine : ITriageEngine
             });
         }
 
-        var maxInline = config.Github.PullRequests.MaxInlineCommentsPerPr;
-        var inlineAccepted = decisions.Where(d => d.Action == PrCommentAction.PostInlineReview).ToList();
-        if (maxInline > 0 && inlineAccepted.Count > maxInline)
-        {
-            var topInline = inlineAccepted.OrderByDescending(d => d.JevScore).Take(maxInline).ToHashSet();
-            for (var i = 0; i < decisions.Count; i++)
-            {
-                var d = decisions[i];
-                if (d.Action == PrCommentAction.PostInlineReview && !topInline.Contains(d))
-                {
-                    decisions[i] = d with
-                    {
-                        Action = PrCommentAction.SummaryCommentOnly,
-                        Reason = $"Moved to PR summary: maxInlineCommentsPerPr cap ({maxInline}) reached."
-                    };
-                }
-            }
-        }
-
+        TriageEngineHelper.EnforceMaxInlineCommentsCap(decisions, config.Github.PullRequests.MaxInlineCommentsPerPr);
         return Task.FromResult(decisions);
     }
 

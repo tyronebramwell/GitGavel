@@ -199,4 +199,91 @@ public class ConfigurationTests
         config.Subagents.Tests.TimeoutSeconds.Should().Be(600);
         config.Subagents.Security.TimeoutSeconds.Should().BeNull();
     }
+
+    [Fact]
+    public void DefaultConfig_SpecsInclude_ContainsReadmeMd()
+    {
+        var config = new GitGavelConfig();
+        config.Scope.Specs.Include.Should().Contain("README.md");
+        config.Scope.Specs.Include.Should().Contain("SPECIFICATION.md");
+    }
+
+    [Theory]
+    [InlineData(0.0, 0.0, 0.0, 0.0)]
+    [InlineData(1.0, 1.0, 1.0, 1.0)]
+    [InlineData(0.85, 0.50, 0.90, 0.50)]
+    public void Validate_WithValidBoundaryConfidenceValues_DoesNotThrow(
+        double autoBacklog,
+        double humanReview,
+        double autoClose,
+        double gatingMin)
+    {
+        var config = new GitGavelConfig();
+        config.Triage.Jev.Thresholds.AutoBacklogConfidence = autoBacklog;
+        config.Triage.Jev.Thresholds.HumanReviewConfidence = humanReview;
+        config.Triage.Jev.Thresholds.AutoCloseIssueConfidence = autoClose;
+        config.Triage.SubagentGating.MinConfidence = gatingMin;
+
+        var act = () => ConfigLoader.Validate(config);
+        act.Should().NotThrow();
+    }
+
+    [Theory]
+    [InlineData(-0.01, 0.50, 0.90, 0.50)]
+    [InlineData(1.01, 0.50, 0.90, 0.50)]
+    [InlineData(0.85, -0.01, 0.90, 0.50)]
+    [InlineData(0.85, 1.01, 0.90, 0.50)]
+    [InlineData(0.85, 0.50, -0.1, 0.50)]
+    [InlineData(0.85, 0.50, 1.1, 0.50)]
+    [InlineData(0.85, 0.50, 0.90, -0.05)]
+    [InlineData(0.85, 0.50, 0.90, 1.05)]
+    public void Validate_WithOutOfRangeConfidenceValues_ThrowsInvalidOperationException(
+        double autoBacklog,
+        double humanReview,
+        double autoClose,
+        double gatingMin)
+    {
+        var config = new GitGavelConfig();
+        config.Triage.Jev.Thresholds.AutoBacklogConfidence = autoBacklog;
+        config.Triage.Jev.Thresholds.HumanReviewConfidence = humanReview;
+        config.Triage.Jev.Thresholds.AutoCloseIssueConfidence = autoClose;
+        config.Triage.SubagentGating.MinConfidence = gatingMin;
+
+        var act = () => ConfigLoader.Validate(config);
+        act.Should().Throw<InvalidOperationException>();
+    }
+
+    [Fact]
+    public void Validate_WithInvalidTimeoutsProviderOrOutputDir_ThrowsInvalidOperationException()
+    {
+        var cfg1 = new GitGavelConfig();
+        cfg1.Subagents.TimeoutSeconds = 0;
+        Action act1 = () => ConfigLoader.Validate(cfg1);
+        act1.Should().Throw<InvalidOperationException>().WithMessage("*timeoutSeconds*");
+
+        var cfg2 = new GitGavelConfig();
+        cfg2.Subagents.Security.TimeoutSeconds = -10;
+        Action act2 = () => ConfigLoader.Validate(cfg2);
+        act2.Should().Throw<InvalidOperationException>().WithMessage("*timeoutSeconds*");
+
+        var cfg3 = new GitGavelConfig();
+        cfg3.Subagents.SpecDrift.Provider = "unsupported-provider";
+        Action act3 = () => ConfigLoader.Validate(cfg3);
+        act3.Should().Throw<InvalidOperationException>().WithMessage("*provider*");
+
+        var cfg4 = new GitGavelConfig();
+        cfg4.Subagents.IssueResolution.CommitLookbackCount = 0;
+        Action act4 = () => ConfigLoader.Validate(cfg4);
+        act4.Should().Throw<InvalidOperationException>().WithMessage("*commitLookbackCount*");
+
+        var cfg5 = new GitGavelConfig();
+        cfg5.Reporting.OutputDir = "   ";
+        Action act5 = () => ConfigLoader.Validate(cfg5);
+        act5.Should().Throw<InvalidOperationException>().WithMessage("*outputDir*");
+
+        var cfg6 = new GitGavelConfig();
+        cfg6.Scope.MaxFileSizeBytes = 0;
+        Action act6 = () => ConfigLoader.Validate(cfg6);
+        act6.Should().Throw<InvalidOperationException>().WithMessage("*maxFileSizeBytes*");
+    }
 }

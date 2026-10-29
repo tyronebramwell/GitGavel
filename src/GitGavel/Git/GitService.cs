@@ -1,14 +1,30 @@
-using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using GitGavel.Configuration;
 
 namespace GitGavel.Git;
 
 public class GitService : IGitService
 {
+    private readonly IProcessRunner _processRunner;
+    private readonly IEnvironmentProvider _env;
+    private readonly Action<string>? _onWarning;
+
+    public GitService(
+        IProcessRunner? processRunner = null,
+        IEnvironmentProvider? environment = null,
+        Action<string>? onWarning = null)
+    {
+        _processRunner = processRunner ?? ProcessRunner.Instance;
+        _env = environment ?? SystemEnvironmentProvider.Instance;
+        _onWarning = onWarning;
+    }
+
     public (string commitSha, string branch) GetGitMetadata(string workingDirectory)
     {
         // 1. Check CI environment variables first
-        var envSha = Environment.GetEnvironmentVariable("GITHUB_SHA");
-        var envBranch = Environment.GetEnvironmentVariable("GITHUB_REF_NAME");
+        var envSha = _env.GetEnvironmentVariable("GITHUB_SHA");
+        var envBranch = _env.GetEnvironmentVariable("GITHUB_REF_NAME");
 
         if (!string.IsNullOrWhiteSpace(envSha) && !string.IsNullOrWhiteSpace(envBranch))
         {
@@ -16,8 +32,8 @@ public class GitService : IGitService
         }
 
         // 2. Query git CLI locally
-        var sha = envSha ?? RunGitCommand(workingDirectory, "rev-parse --short HEAD") ?? "local-dev";
-        var branch = envBranch ?? RunGitCommand(workingDirectory, "rev-parse --abbrev-ref HEAD") ?? "main";
+        var sha = envSha ?? RunGitCommand(workingDirectory, "rev-parse", "--short", "HEAD") ?? "local-dev";
+        var branch = envBranch ?? RunGitCommand(workingDirectory, "rev-parse", "--abbrev-ref", "HEAD") ?? "main";
 
         return (sha.Trim(), branch.Trim());
     }
@@ -25,51 +41,78 @@ public class GitService : IGitService
     public (string owner, string repo) ResolveRepoCoordinates(string workingDirectory, string? explicitRepo = null)
     {
         // 1. Explicit override passed via CLI option or config (format: "owner/repo")
-        if (!string.IsNullOrWhiteSpace(explicitRepo) && explicitRepo.Contains('/'))
+        if (TryParseOwnerRepoPair(explicitRepo, out var explicitCoords))
         {
-            var parts = explicitRepo.Split('/', 2);
-            return (parts[0].Trim(), parts[1].Trim());
+            return explicitCoords;
         }
 
         // 2. Check GITHUB_REPOSITORY environment variable (format: "owner/repo")
-        var envRepo = Environment.GetEnvironmentVariable("GITHUB_REPOSITORY");
-        if (!string.IsNullOrWhiteSpace(envRepo) && envRepo.Contains('/'))
+        var envRepo = _env.GetEnvironmentVariable("GITHUB_REPOSITORY");
+        if (TryParseOwnerRepoPair(envRepo, out var envCoords))
         {
-            var parts = envRepo.Split('/', 2);
-            return (parts[0].Trim(), parts[1].Trim());
+            return envCoords;
         }
 
         // 3. Query git remote origin url
-        var remote = RunGitCommand(workingDirectory, "remote get-url origin");
-        if (!string.IsNullOrWhiteSpace(remote))
+        var remote = RunGitCommand(workingDirectory, "remote", "get-url", "origin");
+        if (TryParseGitRemoteUrl(remote, out var remoteCoords))
         {
-            // https://github.com/owner/repo.git or git@github.com:owner/repo.git
-            var clean = remote.Trim();
-            if (clean.EndsWith(".git")) clean = clean[..^4];
-
-            if (clean.StartsWith("git@github.com:"))
-            {
-                var path = clean["git@github.com:".Length..];
-                var parts = path.Split('/', 2);
-                if (parts.Length == 2) return (parts[0], parts[1]);
-            }
-            else if (clean.Contains("github.com/"))
-            {
-                var idx = clean.IndexOf("github.com/", StringComparison.Ordinal);
-                var path = clean[(idx + "github.com/".Length)..];
-                var parts = path.Split('/', 2);
-                if (parts.Length == 2) return (parts[0], parts[1]);
-            }
+            return remoteCoords;
         }
 
         return ("local-owner", "GitGavel");
+    }
+
+    public static bool TryParseGitRemoteUrl(string? remoteUrl, out (string owner, string repo) coordinates)
+    {
+        coordinates = default;
+        if (string.IsNullOrWhiteSpace(remoteUrl)) return false;
+
+        var clean = remoteUrl.Trim().TrimEnd('/');
+        if (clean.EndsWith(".git", StringComparison.OrdinalIgnoreCase))
+        {
+            clean = clean[..^4].TrimEnd('/');
+        }
+
+        string? path = null;
+        if (clean.StartsWith("git@github.com:", StringComparison.OrdinalIgnoreCase))
+        {
+            path = clean["git@github.com:".Length..];
+        }
+        else if (clean.Contains("github.com/", StringComparison.OrdinalIgnoreCase))
+        {
+            var idx = clean.IndexOf("github.com/", StringComparison.OrdinalIgnoreCase);
+            path = clean[(idx + "github.com/".Length)..];
+        }
+
+        return TryParseOwnerRepoPair(path, out coordinates);
+    }
+
+    private static bool TryParseOwnerRepoPair(string? input, out (string owner, string repo) coordinates)
+    {
+        coordinates = default;
+        if (string.IsNullOrWhiteSpace(input) || !input.Contains('/')) return false;
+
+        var parts = input.Trim().Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (parts.Length != 2 || string.IsNullOrWhiteSpace(parts[0]) || string.IsNullOrWhiteSpace(parts[1]))
+        {
+            return false;
+        }
+
+        coordinates = (parts[0], parts[1]);
+        return true;
     }
 
     public IReadOnlyList<GitCommitRecord> GetRecentCommits(string workingDirectory, int maxCount = 50)
     {
         if (maxCount <= 0) return [];
 
-        var output = RunGitCommand(workingDirectory, $"log -n {maxCount} --name-only --pretty=format:COMMIT_START|%H|%h|%an|%aI|%s");
+        var output = RunGitCommand(workingDirectory, "log", "-n", maxCount.ToString(), "--name-only", "--pretty=format:COMMIT_START|%H|%h|%an|%aI|%s");
+        return ParseCommitLogOutput(output);
+    }
+
+    public static IReadOnlyList<GitCommitRecord> ParseCommitLogOutput(string? output)
+    {
         if (string.IsNullOrWhiteSpace(output)) return [];
 
         var commits = new List<GitCommitRecord>();
@@ -127,16 +170,23 @@ public class GitService : IGitService
     {
         if (explicitPrNumber is > 0) return explicitPrNumber;
 
-        var envPr = Environment.GetEnvironmentVariable("INPUT_PR_NUMBER")
-                    ?? Environment.GetEnvironmentVariable("PR_NUMBER")
-                    ?? Environment.GetEnvironmentVariable("GITHUB_PR_NUMBER");
-        if (int.TryParse(envPr, out var parsedPr) && parsedPr > 0)
-        {
-            return parsedPr;
-        }
+        return TryResolvePrFromEnvironmentVariables()
+               ?? TryResolvePrFromGitHubRef()
+               ?? TryResolvePrFromEventPayload();
+    }
 
+    private int? TryResolvePrFromEnvironmentVariables()
+    {
+        var envPr = _env.GetEnvironmentVariable("INPUT_PR_NUMBER")
+                    ?? _env.GetEnvironmentVariable("PR_NUMBER")
+                    ?? _env.GetEnvironmentVariable("GITHUB_PR_NUMBER");
+        return int.TryParse(envPr, out var parsedPr) && parsedPr > 0 ? parsedPr : null;
+    }
+
+    private int? TryResolvePrFromGitHubRef()
+    {
         // GitHub Actions sets GITHUB_REF to "refs/pull/<pr_number>/merge" on pull_request events
-        var ghRef = Environment.GetEnvironmentVariable("GITHUB_REF");
+        var ghRef = _env.GetEnvironmentVariable("GITHUB_REF");
         if (!string.IsNullOrWhiteSpace(ghRef) && ghRef.StartsWith("refs/pull/", StringComparison.OrdinalIgnoreCase))
         {
             var segments = ghRef.Split('/', StringSplitOptions.RemoveEmptyEntries);
@@ -146,26 +196,52 @@ public class GitService : IGitService
             }
         }
 
-        // Fallback: inspect GITHUB_EVENT_PATH JSON payload for pull_request.number
-        var eventPath = Environment.GetEnvironmentVariable("GITHUB_EVENT_PATH");
-        if (!string.IsNullOrWhiteSpace(eventPath) && File.Exists(eventPath))
+        return null;
+    }
+
+    private const long MaxEventPayloadBytes = 10 * 1024 * 1024; // 10 MB
+
+    private int? TryResolvePrFromEventPayload()
+    {
+        var eventPath = _env.GetEnvironmentVariable("GITHUB_EVENT_PATH");
+        if (string.IsNullOrWhiteSpace(eventPath) || !File.Exists(eventPath))
         {
-            try
+            return null;
+        }
+
+        try
+        {
+            var fileInfo = new FileInfo(eventPath);
+            if (fileInfo.Length > MaxEventPayloadBytes)
             {
-                using var doc = System.Text.Json.JsonDocument.Parse(File.ReadAllText(eventPath));
-                if (doc.RootElement.TryGetProperty("pull_request", out var prElem) &&
-                    prElem.ValueKind == System.Text.Json.JsonValueKind.Object &&
-                    prElem.TryGetProperty("number", out var numProp) &&
-                    numProp.TryGetInt32(out var eventPr) &&
-                    eventPr > 0)
-                {
-                    return eventPr;
-                }
+                _onWarning?.Invoke($"Skipping GITHUB_EVENT_PATH payload at '{eventPath}': file size ({fileInfo.Length} bytes) exceeds maximum limit ({MaxEventPayloadBytes} bytes).");
+                return null;
             }
-            catch
+
+            using var stream = File.OpenRead(eventPath);
+            using var doc = JsonDocument.Parse(stream);
+            if (doc.RootElement.TryGetProperty("pull_request", out var prElem) &&
+                prElem.ValueKind == JsonValueKind.Object &&
+                prElem.TryGetProperty("number", out var numProp) &&
+                numProp.TryGetInt32(out var eventPr) &&
+                eventPr > 0)
             {
-                // Ignore malformed event payload
+                return eventPr;
             }
+
+            if (doc.RootElement.TryGetProperty("issue", out var issueElem) &&
+                issueElem.ValueKind == JsonValueKind.Object &&
+                issueElem.TryGetProperty("pull_request", out _) &&
+                issueElem.TryGetProperty("number", out var issueNumProp) &&
+                issueNumProp.TryGetInt32(out var issuePr) &&
+                issuePr > 0)
+            {
+                return issuePr;
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or IOException or UnauthorizedAccessException)
+        {
+            _onWarning?.Invoke($"Failed to parse GITHUB_EVENT_PATH payload at '{eventPath}': {ex.Message}");
         }
 
         return null;
@@ -184,40 +260,16 @@ public class GitService : IGitService
 
     public string? RunGitCommand(string workingDirectory, IEnumerable<string> args)
     {
-        try
+        var fullArgs = new List<string> { "-c", "safe.directory=*" };
+        foreach (var arg in args)
         {
-            var psi = new ProcessStartInfo
+            if (!string.IsNullOrEmpty(arg))
             {
-                FileName = "git",
-                WorkingDirectory = workingDirectory,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                UseShellExecute = false,
-                CreateNoWindow = true
-            };
-
-            psi.ArgumentList.Add("-c");
-            psi.ArgumentList.Add("safe.directory=*");
-
-            foreach (var arg in args)
-            {
-                if (!string.IsNullOrEmpty(arg))
-                {
-                    psi.ArgumentList.Add(arg);
-                }
+                fullArgs.Add(arg);
             }
-
-            using var process = Process.Start(psi);
-            if (process == null) return null;
-
-            var output = process.StandardOutput.ReadToEnd();
-            process.WaitForExit(5000);
-            return process.ExitCode == 0 ? output.Trim() : null;
         }
-        catch
-        {
-            return null;
-        }
+
+        return _processRunner.Run("git", workingDirectory, fullArgs, timeoutMs: 5000, onError: _onWarning);
     }
 
     public static List<string> TokenizeArguments(string args)
@@ -225,14 +277,14 @@ public class GitService : IGitService
         var list = new List<string>();
         if (string.IsNullOrWhiteSpace(args)) return list;
 
-        var sb = new System.Text.StringBuilder();
-        bool inQuotes = false;
-        char quoteChar = '\0';
+        var sb = new StringBuilder();
+        var inQuotes = false;
+        var quoteChar = '\0';
 
-        for (int i = 0; i < args.Length; i++)
+        for (var i = 0; i < args.Length; i++)
         {
-            char c = args[i];
-            bool isEscaped = i > 0 && args[i - 1] == '\\';
+            var c = args[i];
+            var isEscaped = i > 0 && args[i - 1] == '\\';
 
             if ((c == '"' || c == '\'') && (!inQuotes || c == quoteChar) && !isEscaped)
             {

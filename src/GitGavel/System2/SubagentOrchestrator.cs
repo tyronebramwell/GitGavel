@@ -208,6 +208,15 @@ public class SubagentOrchestrator : ISubagentOrchestrator
         GitGavelConfig config,
         CancellationToken ct = default)
     {
+        if (config.Subagents.IssueResolution?.Enabled != true || openIssues.Count == 0)
+        {
+            return new IssueResolutionAgentResult
+            {
+                AgentName = "IssueResolutionAuditor",
+                Candidates = []
+            };
+        }
+
         var client = _clientFactory.CreateClient(config.Subagents.IssueResolution, config);
         var agent = new IssueResolutionAgent(client, config.Subagents.IssueResolution.Model);
         return await agent.EvaluateOpenIssuesAsync(openIssues, repoContext, ct);

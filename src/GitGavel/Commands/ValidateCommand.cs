@@ -85,15 +85,4 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         AnsiConsole.Write(envTable);
         return 0;
     }
-
-    private static void CheckEnv(Table table, string varName, string purpose, bool isRequired)
-    {
-        var val = Environment.GetEnvironmentVariable(varName);
-        var isSet = !string.IsNullOrWhiteSpace(val);
-        var status = isSet
-            ? "[green]Configured[/]"
-            : isRequired ? "[red]Missing (Required)[/]" : "[yellow]Not Set (Optional)[/]";
-
-        table.AddRow(varName, purpose, status);
-    }
 }

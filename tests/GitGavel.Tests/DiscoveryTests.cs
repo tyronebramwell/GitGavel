@@ -168,4 +168,143 @@ public class DiscoveryTests
         scoped.TestFiles.Should().ContainSingle(f => f.RelativePath == "tests/ChangedServiceTests.cs" && f.DiffPatch == "@@ -1,3 +1,7 @@");
         scoped.SarifFindings.Should().ContainSingle(s => s.FilePath == "src/ChangedService.cs");
     }
+
+    [Fact]
+    public void AstAnalyzer_Analyze_DetectsModernCSharpSyntaxAndIgnoresBranchKeywordsInCommentsAndStrings()
+    {
+        var code = """
+        // if (commentBranch && anotherBranch || thirdBranch) while (true) foreach (var x in y) switch (z) case 1: catch
+        /*
+           Multi-line comment with if (a && b || c) while (true) for (;;) case 1: catch (Exception)
+        */
+        public record OrderRecord(int Id);
+        public readonly record struct MoneyStruct(decimal Amount);
+        public readonly struct PointStruct(int X, int Y);
+        public interface IOrderRepository {}
+        public enum OrderStatus { Pending, Paid }
+        public abstract class BaseService<T> where T : class
+        {
+            private const string Message = "if (stringLiteral && shouldNotCount || while (true) switch case catch)";
+            public async Task<IReadOnlyList<T>> FetchAllAsync<TItem>(int count) => [];
+        }
+        """;
+
+        var file = new ScannedFile("src/Models.cs", "/mock/src/Models.cs", 16, code.Length, code, false);
+        var summary = AstAnalyzer.Analyze(file);
+
+        summary.Symbols.Should().Contain(s => s.Kind == "record" && s.Name == "OrderRecord");
+        summary.Symbols.Should().Contain(s => s.Kind == "record" && s.Name == "MoneyStruct");
+        summary.Symbols.Should().Contain(s => s.Kind == "struct" && s.Name == "PointStruct");
+        summary.Symbols.Should().Contain(s => s.Kind == "interface" && s.Name == "IOrderRepository");
+        summary.Symbols.Should().Contain(s => s.Kind == "enum" && s.Name == "OrderStatus");
+        summary.Symbols.Should().Contain(s => s.Kind == "class" && s.Name == "BaseService");
+        summary.Symbols.Should().Contain(s => s.Kind == "method" && s.Name == "FetchAllAsync");
+
+        // None of the branching keywords in comments or string literals should inflate complexity
+        summary.TotalComplexityScore.Should().Be(0);
+        summary.IsComplexityHotspot.Should().BeFalse();
+    }
+
+    [Fact]
+    public async Task FileScanner_WithNullConfigListsAndOversizedFiles_DoesNotThrowAndSkipsLargeFiles()
+    {
+        var tempDir = Path.Combine(Path.GetTempPath(), "gitgavel_scanner_bounds_" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(tempDir);
+
+        try
+        {
+            var smallFile = Path.Combine(tempDir, "Small.cs");
+            var largeFile = Path.Combine(tempDir, "Large.cs");
+            await File.WriteAllTextAsync(smallFile, "public class Small {}");
+            await File.WriteAllTextAsync(largeFile, new string('A', 2048));
+
+            // 1. Null config lists do not throw NullReferenceException (#112)
+            var nullConfig = new GitGavelConfig();
+            nullConfig.Scope.Specs.Include = null!;
+            nullConfig.Scope.Source.Include = null!;
+            nullConfig.Scope.Source.Exclude = null!;
+            nullConfig.Scope.Tests.Include = null!;
+            nullConfig.Scope.Tests.Exclude = null!;
+            nullConfig.Subagents.Security.SarifReports = null!;
+
+            var scanner = new FileScanner();
+            var emptyCtx = await scanner.ScanAsync(tempDir, nullConfig);
+            emptyCtx.SourceFiles.Should().BeEmpty();
+            emptyCtx.SpecFiles.Should().BeEmpty();
+            emptyCtx.TestFiles.Should().BeEmpty();
+
+            // 2. MaxFileSizeBytes guard skips Large.cs (#81)
+            var sizeConfig = new GitGavelConfig();
+            sizeConfig.Scope.MaxFileSizeBytes = 500;
+            sizeConfig.Scope.Source.Include = ["**/*.cs"];
+
+            var sizedCtx = await scanner.ScanAsync(tempDir, sizeConfig);
+            sizedCtx.SourceFiles.Should().ContainSingle(f => f.RelativePath == "Small.cs");
+            sizedCtx.SourceFiles.Should().NotContain(f => f.RelativePath == "Large.cs");
+        }
+        finally
+        {
+            if (Directory.Exists(tempDir)) Directory.Delete(tempDir, true);
+        }
+    }
+
+    [Fact]
+    public void RepoContext_ScopeToPullRequest_HandlesEmptyChangedFilesBackslashesAndCaseInsensitivity()
+    {
+        var repoContext = new RepoContext
+        {
+            RootDirectory = "/mock/repo",
+            SpecFiles = [new ScannedFile("README.md", "/mock/repo/README.md", 10, 100, "# Readme", true)],
+            SourceFiles = [new ScannedFile("src/SubDir/MyService.cs", "/mock/repo/src/SubDir/MyService.cs", 30, 500, "class MyService {}", false)],
+            TestFiles = [new ScannedFile("tests/MyServiceTests.cs", "/mock/repo/tests/MyServiceTests.cs", 20, 300, "class MyServiceTests {}", false, true)],
+            SarifFindings = [new SarifFinding("R1", "Msg", "warning", "SRC\\SUBDIR\\MYSERVICE.CS", 5, 6)],
+            AstSummaries =
+            [
+                new FileAstSummary("src/SubDir/MyService.cs", [], 5, false),
+                new FileAstSummary("src/Other.cs", [], 3, false)
+            ]
+        };
+
+        // 1. Backslashes and different casing in PR ChangedFiles
+        var prWithBackslash = new GitGavel.System2.Models.PullRequestContext
+        {
+            PrNumber = 10,
+            Title = "Windows path PR",
+            ChangedFiles =
+            [
+                new GitGavel.System2.Models.PullRequestChangedFile("SRC\\SubDir\\MyService.cs", "modified", 4, 1, "@@ -1 +1 @@")
+            ]
+        };
+
+        var scoped = repoContext.ScopeToPullRequest(prWithBackslash);
+        scoped.SourceFiles.Should().ContainSingle(f => f.RelativePath == "src/SubDir/MyService.cs");
+        scoped.TestFiles.Should().BeEmpty();
+        scoped.SarifFindings.Should().ContainSingle();
+        scoped.AstSummaries.Should().ContainSingle(a => a.RelativePath == "src/SubDir/MyService.cs");
+
+        // 2. Empty ChangedFiles
+        var emptyPr = new GitGavel.System2.Models.PullRequestContext
+        {
+            PrNumber = 11,
+            Title = "Empty PR",
+            ChangedFiles = []
+        };
+        var emptyScoped = repoContext.ScopeToPullRequest(emptyPr);
+        emptyScoped.SourceFiles.Should().BeEmpty();
+        emptyScoped.TestFiles.Should().BeEmpty();
+        emptyScoped.SpecFiles.Should().HaveCount(1);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("{malformed json")]
+    [InlineData("{}")]
+    [InlineData("{\"runs\": []}")]
+    [InlineData("{\"runs\": [{\"results\": [{}]}]}")]
+    public void SarifParser_Parse_WithEmptyMalformedOrIncompleteSarif_ReturnsEmptyWithoutThrowing(string rawSarif)
+    {
+        var findings = SarifParser.Parse(rawSarif);
+        findings.Should().NotBeNull();
+    }
 }

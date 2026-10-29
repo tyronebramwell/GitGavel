@@ -15,11 +15,12 @@ public class ScopeConfig
     public SpecsScopeConfig Specs { get; set; } = new();
     public SourceScopeConfig Source { get; set; } = new();
     public TestsScopeConfig Tests { get; set; } = new();
+    public long MaxFileSizeBytes { get; set; } = 1024 * 1024; // 1 MB default limit to prevent unbounded memory growth
 }
 
 public class SpecsScopeConfig
 {
-    public List<string> Include { get; set; } = ["SPECIFICATION.md", "Dockerfile", "action.yml", "docs/**/*.md", "specs/**/*.md", "api/openapi.json"];
+    public List<string> Include { get; set; } = ["SPECIFICATION.md", "README.md", "Dockerfile", "action.yml", "docs/**/*.md", "specs/**/*.md", "api/openapi.json"];
 }
 
 public class SourceScopeConfig

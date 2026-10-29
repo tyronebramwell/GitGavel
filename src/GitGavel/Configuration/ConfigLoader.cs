@@ -7,6 +7,14 @@ namespace GitGavel.Configuration;
 
 public static partial class ConfigLoader
 {
+    private static readonly HashSet<string> SupportedProviders = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "gemini",
+        "openai",
+        "anthropic",
+        "mock"
+    };
+
     [GeneratedRegex(@"(?m)^(?!\s*#)\s*(?:apiKey|api_key)\s*:\s*['""]?\S+", RegexOptions.IgnoreCase | RegexOptions.Compiled)]
     private static partial Regex DirectApiKeyRegex();
 
@@ -57,12 +65,27 @@ public static partial class ConfigLoader
     {
         ArgumentNullException.ThrowIfNull(config);
 
-        if (config.Triage.MaxIssuesPerRun <= 0)
+        ValidateTriage(config.Triage);
+        ValidateScope(config.Scope);
+        ValidateSubagents(config.Subagents, allowExternalPaths);
+        ValidateReporting(config.Reporting, allowExternalPaths);
+    }
+
+    public static void ValidateTriage(TriageConfig triage)
+    {
+        ArgumentNullException.ThrowIfNull(triage);
+
+        if (triage.MaxIssuesPerRun <= 0)
         {
             throw new InvalidOperationException("triage.maxIssuesPerRun must be greater than 0.");
         }
 
-        var thresholds = config.Triage.Jev.Thresholds;
+        if (triage.SubagentGating != null && triage.SubagentGating.MinConfidence is < 0 or > 1.0)
+        {
+            throw new InvalidOperationException("triage.subagentGating.minConfidence must be between 0.0 and 1.0.");
+        }
+
+        var thresholds = triage.Jev.Thresholds;
         if (thresholds.AutoBacklogConfidence is < 0 or > 1.0)
         {
             throw new InvalidOperationException("triage.jev.thresholds.autoBacklogConfidence must be between 0.0 and 1.0.");
@@ -82,18 +105,48 @@ public static partial class ConfigLoader
         {
             throw new InvalidOperationException("triage.jev.thresholds.autoCloseIssueConfidence must be between 0.0 and 1.0.");
         }
+    }
 
-        // Validate Scope Glob Patterns for directory traversal or absolute paths
-        ValidateScopePatterns("scope.specs.include", config.Scope.Specs.Include);
-        ValidateScopePatterns("scope.source.include", config.Scope.Source.Include);
-        ValidateScopePatterns("scope.source.exclude", config.Scope.Source.Exclude);
-        ValidateScopePatterns("scope.tests.include", config.Scope.Tests.Include);
-        ValidateScopePatterns("scope.tests.exclude", config.Scope.Tests.Exclude);
+    public static void ValidateScope(ScopeConfig scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
 
-        // Validate SARIF report paths
-        if (config.Subagents.Security.SarifReports != null)
+        if (scope.MaxFileSizeBytes <= 0)
         {
-            foreach (var sarifPath in config.Subagents.Security.SarifReports)
+            throw new InvalidOperationException("scope.maxFileSizeBytes must be greater than 0.");
+        }
+
+        ValidateScopePatterns("scope.specs.include", scope.Specs?.Include);
+        ValidateScopePatterns("scope.source.include", scope.Source?.Include);
+        ValidateScopePatterns("scope.source.exclude", scope.Source?.Exclude);
+        ValidateScopePatterns("scope.tests.include", scope.Tests?.Include);
+        ValidateScopePatterns("scope.tests.exclude", scope.Tests?.Exclude);
+    }
+
+    public static void ValidateSubagents(SubagentsConfig subagents, bool allowExternalPaths = false)
+    {
+        ArgumentNullException.ThrowIfNull(subagents);
+
+        if (subagents.TimeoutSeconds <= 0)
+        {
+            throw new InvalidOperationException("subagents.timeoutSeconds must be greater than 0.");
+        }
+
+        if (subagents.IssueResolution != null && subagents.IssueResolution.CommitLookbackCount <= 0)
+        {
+            throw new InvalidOperationException("subagents.issueResolution.commitLookbackCount must be greater than 0.");
+        }
+
+        ValidateSubagentProvider("subagents.specDrift", subagents.SpecDrift);
+        ValidateSubagentProvider("subagents.security", subagents.Security);
+        ValidateSubagentProvider("subagents.reliability", subagents.Reliability);
+        ValidateSubagentProvider("subagents.refactoring", subagents.Refactoring);
+        ValidateSubagentProvider("subagents.tests", subagents.Tests);
+        ValidateSubagentProvider("subagents.issueResolution", subagents.IssueResolution);
+
+        if (subagents.Security?.SarifReports != null)
+        {
+            foreach (var sarifPath in subagents.Security.SarifReports)
             {
                 if (string.IsNullOrWhiteSpace(sarifPath)) continue;
                 if (!allowExternalPaths && !PathSecurity.IsSafeRelativePath(sarifPath))
@@ -102,14 +155,35 @@ public static partial class ConfigLoader
                 }
             }
         }
+    }
 
-        // Validate reporting output directory
-        if (!string.IsNullOrWhiteSpace(config.Reporting.OutputDir))
+    public static void ValidateReporting(ReportingConfig reporting, bool allowExternalPaths = false)
+    {
+        ArgumentNullException.ThrowIfNull(reporting);
+
+        if (string.IsNullOrWhiteSpace(reporting.OutputDir))
         {
-            if (!allowExternalPaths && !PathSecurity.IsSafeRelativePath(config.Reporting.OutputDir))
-            {
-                throw new SecurityException($"Unsafe reporting output directory detected: '{config.Reporting.OutputDir}'. Reporting output directory must be relative and cannot contain directory traversal ('..'). Use --allow-external-paths to override.");
-            }
+            throw new InvalidOperationException("reporting.outputDir cannot be empty.");
+        }
+
+        if (!allowExternalPaths && !PathSecurity.IsSafeRelativePath(reporting.OutputDir))
+        {
+            throw new SecurityException($"Unsafe reporting output directory detected: '{reporting.OutputDir}'. Reporting output directory must be relative and cannot contain directory traversal ('..'). Use --allow-external-paths to override.");
+        }
+    }
+
+    private static void ValidateSubagentProvider(string sectionName, SubagentSettings? settings)
+    {
+        if (settings == null) return;
+
+        if (!string.IsNullOrWhiteSpace(settings.Provider) && !SupportedProviders.Contains(settings.Provider))
+        {
+            throw new InvalidOperationException($"Unsupported LLM provider '{settings.Provider}' in {sectionName}. Supported providers are: {string.Join(", ", SupportedProviders)}.");
+        }
+
+        if (settings.TimeoutSeconds is <= 0)
+        {
+            throw new InvalidOperationException($"{sectionName}.timeoutSeconds must be greater than 0.");
         }
     }
 
@@ -126,9 +200,9 @@ public static partial class ConfigLoader
         }
     }
 
-    public static string? ResolveEnv(string envVarName)
+    public static string? ResolveEnv(string envVarName, IEnvironmentProvider? environment = null)
     {
         if (string.IsNullOrWhiteSpace(envVarName)) return null;
-        return Environment.GetEnvironmentVariable(envVarName);
+        return (environment ?? SystemEnvironmentProvider.Instance).GetEnvironmentVariable(envVarName);
     }
 }
