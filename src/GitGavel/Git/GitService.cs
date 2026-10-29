@@ -199,6 +199,8 @@ public class GitService : IGitService
         return null;
     }
 
+    private const long MaxEventPayloadBytes = 10 * 1024 * 1024; // 10 MB
+
     private int? TryResolvePrFromEventPayload()
     {
         var eventPath = _env.GetEnvironmentVariable("GITHUB_EVENT_PATH");
@@ -209,7 +211,15 @@ public class GitService : IGitService
 
         try
         {
-            using var doc = JsonDocument.Parse(File.ReadAllText(eventPath));
+            var fileInfo = new FileInfo(eventPath);
+            if (fileInfo.Length > MaxEventPayloadBytes)
+            {
+                _onWarning?.Invoke($"Skipping GITHUB_EVENT_PATH payload at '{eventPath}': file size ({fileInfo.Length} bytes) exceeds maximum limit ({MaxEventPayloadBytes} bytes).");
+                return null;
+            }
+
+            using var stream = File.OpenRead(eventPath);
+            using var doc = JsonDocument.Parse(stream);
             if (doc.RootElement.TryGetProperty("pull_request", out var prElem) &&
                 prElem.ValueKind == JsonValueKind.Object &&
                 prElem.TryGetProperty("number", out var numProp) &&

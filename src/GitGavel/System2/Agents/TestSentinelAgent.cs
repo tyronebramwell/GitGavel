@@ -31,7 +31,7 @@ public class TestSentinelAgent : BaseLlmAgent
         AgentPromptBuilder.AppendPullRequestGuidance(
             promptBuilder,
             context,
-            "ANTI-SCOPE-CREEP RULE: Only report High or Medium severity missing tests for completely untested production logic introduced in this PR. If the PR already includes unit/integration tests for the modified production methods, return []. Do NOT request tests for trivial constructors, getters, or tests for existing tests.");
+            "ANTI-SCOPE-CREEP RULE: Only report High or Medium severity missing tests for completely untested production logic introduced in this PR. Check the 'Existing Automated Test Suite Symbol Map' below before reporting any MissingTest finding—if unit or integration test methods already exist in the symbol map or test files for the production class/method (even when large test file bodies are truncated), return []. Do NOT request tests for trivial constructors, getters, or tests for existing tests.");
 
         promptBuilder.AppendLine("Identify:");
         promptBuilder.AppendLine("1. Missing Test Detection (MissingTest): critical production classes, public methods, business rules, or error paths lacking Unit, Integration, or E2E coverage.");
@@ -49,6 +49,8 @@ public class TestSentinelAgent : BaseLlmAgent
         }
         else
         {
+            var testSummaries = AstAnalyzer.AnalyzeAll(context.TestFiles!);
+            AgentPromptBuilder.AppendSymbolMap(promptBuilder, testSummaries, includeComplexity: false, heading: "### Existing Automated Test Suite Symbol Map (All Discovered Test Classes & Methods):");
             AgentPromptBuilder.AppendFilesSection(promptBuilder, context.TestFiles!, "### Existing Automated Test Suite Files:", fileLabelPrefix: "Test File");
         }
 
