@@ -116,7 +116,7 @@ jobs:
       - name: Run Gitleaks Secret Scanner (SARIF Output)
         run: |
           wget -qO- https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar xz gitleaks
-          ./gitleaks git . --report-format sarif --report-path artifacts/sarif/gitleaks.sarif --exit-code 1
+          ./gitleaks git . --config .gitleaks.toml --report-format sarif --report-path artifacts/sarif/gitleaks.sarif --exit-code 1
           rm -f gitleaks
 
       # 2. SAST (Semgrep OSS -> SARIF Artifact)
