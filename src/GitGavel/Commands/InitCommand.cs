@@ -22,9 +22,19 @@ public class InitCommand : Command<InitCommand.Settings>
 
     public override int Execute([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
     {
-        var targetFile = string.IsNullOrWhiteSpace(settings.TargetDirectory) || settings.TargetDirectory == "."
-            ? ".gitgavel.yml"
-            : Path.Combine(settings.TargetDirectory, ".gitgavel.yml");
+        var rawDir = string.IsNullOrWhiteSpace(settings.TargetDirectory) ? "." : settings.TargetDirectory;
+        if (rawDir.Split(['/', '\\'], StringSplitOptions.RemoveEmptyEntries).Contains(".."))
+        {
+            AnsiConsole.MarkupLine("[red]✗[/] Invalid target directory: path traversal ('..') is not allowed.");
+            return 1;
+        }
+
+        var resolvedDir = Path.GetFullPath(rawDir);
+        PathSecurity.ValidateRootDirectory(resolvedDir);
+        var targetFile = PathSecurity.ResolveAndVerifyWithinRoot(
+            Path.Combine(resolvedDir, ".gitgavel.yml"),
+            resolvedDir,
+            allowExternal: false);
 
         if (File.Exists(targetFile) && !settings.Force)
         {

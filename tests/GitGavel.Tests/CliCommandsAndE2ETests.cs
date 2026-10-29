@@ -48,6 +48,10 @@ public class CliCommandsAndE2ETests
             var code3 = cmd.Execute(ctx, new InitCommand.Settings { TargetDirectory = tempDir, Force = true }, CancellationToken.None);
             code3.Should().Be(0);
             File.ReadAllText(configFile).Should().Contain("triage:");
+
+            // 4. Rejects path traversal ('..') in TargetDirectory
+            var code4 = cmd.Execute(ctx, new InitCommand.Settings { TargetDirectory = "../outside", Force = true }, CancellationToken.None);
+            code4.Should().Be(1);
         }
         finally
         {
