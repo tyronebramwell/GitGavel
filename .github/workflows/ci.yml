@@ -1,4 +1,4 @@
-name: "CI Build & Test"
+name: "CI Build, Lint, Test & Agent Evidence"
 
 on:
   push:
@@ -6,8 +6,17 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+  checks: write
+  pull-requests: read
+
 jobs:
+  # ---------------------------------------------------------------------------
+  # JOB 1: .NET 10 Build, Lint, NuGet Telemetry, Tests & Coverage
+  # ---------------------------------------------------------------------------
   build-and-test:
+    name: "Build, Test & .NET Telemetry"
     runs-on: ubuntu-latest
 
     steps:
@@ -19,18 +28,140 @@ jobs:
         with:
           dotnet-version: "10.0.x"
 
+      - name: Cache NuGet Packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: |
+            ${{ runner.os }}-nuget-
+
+      - name: Prepare Evidence Directories
+        run: mkdir -p artifacts/sarif artifacts/dotnet artifacts/tests artifacts/coverage
+
       - name: Restore Dependencies
         run: dotnet restore
 
-      - name: Build Solution
-        run: dotnet build --no-restore --configuration Release
+      # 1. LINTER: Saves structured JSON report to artifacts/dotnet/dotnet-format.json
+      - name: Run .NET Format Linter (JSON Artifact)
+        run: |
+          dotnet format --verify-no-changes --no-restore \
+            --report artifacts/dotnet/dotnet-format.json
 
-      - name: Run Unit Tests
-        run: dotnet test --no-build --configuration Release --verbosity normal --logger "trx;LogFileName=test-results.trx"
+      # 2. NUGET HEALTH: Exports Vulnerable, Deprecated & Outdated packages as JSON
+      - name: Export NuGet Vulnerability, Deprecation & Outdated JSON Reports
+        run: |
+          dotnet list package --vulnerable --include-transitive --format json > artifacts/dotnet/nuget-vulnerable.json
+          dotnet list package --deprecated --include-transitive --format json > artifacts/dotnet/nuget-deprecated.json
+          dotnet list package --outdated --format json > artifacts/dotnet/nuget-outdated.json
 
-      - name: Upload Test Results
+      # 3. BUILD: Exports Roslyn Compiler & Analyzer diagnostics as SARIF 2.1
+      - name: Build Solution & Export Roslyn SARIF
+        run: |
+          dotnet build --no-restore --configuration Release \
+            /p:ErrorLog=$(pwd)/artifacts/sarif/roslyn.sarif,version=2.1
+
+      # 4. TESTS + RAW COVERAGE: Outputs .trx and Cobertura XML
+      - name: Run Unit Tests & Collect Coverage
+        run: >
+          dotnet test --no-build --configuration Release --verbosity normal
+          --logger "trx;LogFileName=test-results.trx"
+          --collect:"XPlat Code Coverage"
+          --results-directory ./artifacts/tests
+
+      # 5. STRUCTURED COVERAGE JSON: Converts XML into Summary.json for TestSentinelAgent
+      #    + posts Markdown table to GitHub Actions UI
+      - name: Generate Coverage JSON & GitHub Summary
+        uses: danielpalme/ReportGenerator-GitHub-Action@v5
+        if: always()
+        with:
+          reports: "artifacts/tests/**/coverage.cobertura.xml"
+          targetdir: "artifacts/coverage"
+          reporttypes: "JsonSummary;Cobertura;MarkdownSummaryGithub"
+
+      # 6. GITHUB CHECKS UI: Renders interactive test results on PRs
+      - name: Publish Test Results to GitHub UI
+        uses: dorny/test-reporter@v1
+        if: always()
+        with:
+          name: ".NET 10 xUnit Test Results"
+          path: "artifacts/tests/**/*.trx"
+          reporter: dotnet-trx
+          fail-on-error: true
+
+      - name: Upload .NET Evidence Artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-results
-          path: "**/TestResults/*.trx"
+          name: dotnet-ci-evidence
+          path: artifacts/**
+
+  # ---------------------------------------------------------------------------
+  # JOB 2: Security, Container, Action & SBOM Evidence (Runs in Parallel)
+  # ---------------------------------------------------------------------------
+  security-and-infra:
+    name: "Security, Container & Workflow SARIFs"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code (Full History for Secret Scanning)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Prepare Evidence Directories
+        run: mkdir -p artifacts/sarif artifacts/sbom
+
+      # 1. SECRETS (Gitleaks CLI -> SARIF Artifact)
+      - name: Run Gitleaks Secret Scanner (SARIF Output)
+        run: |
+          wget -qO- https://github.com/gitleaks/gitleaks/releases/download/v8.21.2/gitleaks_8.21.2_linux_x64.tar.gz | tar xz gitleaks
+          ./gitleaks git . --config .gitleaks.toml --report-format sarif --report-path artifacts/sarif/gitleaks.sarif --exit-code 1
+          rm -f gitleaks
+
+      # 2. SAST (Semgrep OSS -> SARIF Artifact)
+      - name: Run Semgrep OSS SAST (SARIF Output)
+        run: |
+          pipx run semgrep scan --config auto --sarif --output artifacts/sarif/semgrep.sarif || true
+
+      # 3. CVE & CONFIG SCANNER (Trivy -> SARIF Artifact)
+      - name: Run Trivy Vulnerability & Config Scanner (SARIF Output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scanners: "vuln,config"
+          format: "sarif"
+          output: "artifacts/sarif/trivy.sarif"
+          exit-code: "0"
+
+      # 4. SBOM GENERATOR (Trivy -> CycloneDX JSON Artifact)
+      - name: Generate CycloneDX SBOM (JSON Output)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          format: "cyclonedx"
+          output: "artifacts/sbom/sbom.cdx.json"
+
+      # 5. DOCKERFILE AST LINTER (Hadolint -> SARIF Artifact)
+      - name: Lint Dockerfile with Hadolint (SARIF Output)
+        uses: hadolint/hadolint-action@v3.1.0
+        if: hashFiles('Dockerfile') != ''
+        with:
+          dockerfile: Dockerfile
+          format: sarif
+          output-file: artifacts/sarif/hadolint.sarif
+          no-fail: true
+
+      # 6. GITHUB ACTIONS & action.yml LINTER (Actionlint -> JSON Artifact)
+      - name: Lint GitHub Workflows & action.yml (JSON Output)
+        run: |
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/main/scripts/download-actionlint.bash)
+          ./actionlint -format '{{json .}}' > artifacts/sarif/actionlint.json || true
+          rm -f actionlint
+
+      - name: Upload Security & Infra Evidence Artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: security-ci-evidence
+          path: artifacts/**

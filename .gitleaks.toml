@@ -1,0 +1,14 @@
+title = "GitGavel Gitleaks Configuration"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Ignore synthetic dummy API key fixtures inside automated unit tests"
+paths = [
+  '''^tests/'''
+]
+regexes = [
+  '''jev_sec_key_12345''',
+  '''AIzaSyD-unauthorized-plain-text-key'''
+]
