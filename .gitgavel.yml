@@ -17,6 +17,8 @@ scope:
     exclude:
     - '**/bin/**'
     - '**/obj/**'
+    - '**/artifacts/**'
+    - 'artifacts/**'
     - '**/*.Tests/**'
     - 'tests/**'
     - '**/.git/**'
@@ -31,6 +33,8 @@ scope:
     exclude:
     - '**/bin/**'
     - '**/obj/**'
+    - '**/artifacts/**'
+    - 'artifacts/**'
     - '**/.git/**'
 subagents:
   apiKeyEnv: GEMINI_API_KEY
@@ -41,6 +45,11 @@ subagents:
   security:
     sarifReports:
     - reports/semgrep.sarif
+    - artifacts/sarif/semgrep.sarif
+    - artifacts/sarif/trivy.sarif
+    - artifacts/sarif/gitleaks.sarif
+    - artifacts/sarif/roslyn.sarif
+    - artifacts/sarif/hadolint.sarif
     enabled: true
     provider: gemini
     model: gemini-2.5-flash

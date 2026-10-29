@@ -6,6 +6,7 @@ dist/
 /packages/
 TestResults/
 reports/
+artifacts/
 
 # Environment and Secret Files
 .env
