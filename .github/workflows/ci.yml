@@ -9,7 +9,9 @@ on:
 permissions:
   contents: read
   checks: write
-  pull-requests: read
+  issues: write
+  pull-requests: write
+  repository-projects: write
 
 jobs:
   # ---------------------------------------------------------------------------
@@ -73,7 +75,7 @@ jobs:
       #    + posts Markdown table to GitHub Actions UI
       - name: Generate Coverage JSON & GitHub Summary
         uses: danielpalme/ReportGenerator-GitHub-Action@v5
-        if: always()
+        if: always() && hashFiles('artifacts/tests/**/coverage.cobertura.xml') != ''
         with:
           reports: "artifacts/tests/**/coverage.cobertura.xml"
           targetdir: "artifacts/coverage"
@@ -82,7 +84,7 @@ jobs:
       # 6. GITHUB CHECKS UI: Renders interactive test results on PRs
       - name: Publish Test Results to GitHub UI
         uses: dorny/test-reporter@v1
-        if: always()
+        if: always() && hashFiles('artifacts/tests/**/*.trx') != ''
         with:
           name: ".NET 10 xUnit Test Results"
           path: "artifacts/tests/**/*.trx"
@@ -165,3 +167,51 @@ jobs:
         with:
           name: security-ci-evidence
           path: artifacts/**
+
+  # ---------------------------------------------------------------------------
+  # JOB 3: GitGavel AI Repo & PR Audit (Runs after Jobs 1 & 2 complete)
+  # ---------------------------------------------------------------------------
+  audit:
+    name: "GitGavel AI Repo & PR Audit"
+    runs-on: ubuntu-latest
+    needs: [build-and-test, security-and-infra]
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download .NET CI Evidence Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dotnet-ci-evidence
+          path: artifacts
+        continue-on-error: true
+
+      - name: Download Security & Infra Evidence Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: security-ci-evidence
+          path: artifacts
+        continue-on-error: true
+
+      - name: Run GitGavel Auditor
+        uses: ./
+        with:
+          config_path: .gitgavel.yml
+          dry_run: false
+          mock: false
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.AI_API_KEY }}
+          AI_API_KEY: ${{ secrets.AI_API_KEY || secrets.GEMINI_API_KEY }}
+          JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
+
+      - name: Upload Audit Reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gitgavel-audit-reports
+          path: ./reports/
+          retention-days: 30

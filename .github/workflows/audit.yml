@@ -1,12 +1,8 @@
-name: "GitGavel AI Repo & PR Audit"
+name: "GitGavel Scheduled & Manual Audit"
 
 on:
-  push:
-    branches: [main]
   schedule:
     - cron: '0 3 * * 1'
-  pull_request:
-    types: [opened, synchronize, reopened]
   workflow_dispatch:
     inputs:
       dry_run:

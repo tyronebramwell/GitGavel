@@ -209,71 +209,71 @@ public static class PipelineArtifactIngestor
         {
             case "trx":
             case "junit":
-            {
-                var summary = await ParseTestResultsAsync(filePaths, type, ct);
-                var sb = new StringBuilder();
-                sb.AppendLine($"Test Execution Summary: {summary.TotalTests} total, {summary.PassedTests} passed, {summary.FailedTests} failed, {summary.SkippedTests} skipped.");
-                foreach (var fail in summary.FailedTestDetails.Take(15))
                 {
-                    sb.AppendLine($"- FAILED `{fail.TestName}`: {fail.ErrorMessage}");
-                    if (!string.IsNullOrWhiteSpace(fail.StackTrace))
+                    var summary = await ParseTestResultsAsync(filePaths, type, ct);
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"Test Execution Summary: {summary.TotalTests} total, {summary.PassedTests} passed, {summary.FailedTests} failed, {summary.SkippedTests} skipped.");
+                    foreach (var fail in summary.FailedTestDetails.Take(15))
                     {
-                        var trace = fail.StackTrace.Length > 400 ? fail.StackTrace[..400] + "..." : fail.StackTrace;
-                        sb.AppendLine($"  Stack: {trace}");
+                        sb.AppendLine($"- FAILED `{fail.TestName}`: {fail.ErrorMessage}");
+                        if (!string.IsNullOrWhiteSpace(fail.StackTrace))
+                        {
+                            var trace = fail.StackTrace.Length > 400 ? fail.StackTrace[..400] + "..." : fail.StackTrace;
+                            sb.AppendLine($"  Stack: {trace}");
+                        }
                     }
-                }
 
-                return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars), TestSummary: summary);
-            }
+                    return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars), TestSummary: summary);
+                }
 
             case "cobertura":
             case "lcov":
             case "opencover":
-            {
-                var cov = await ParseCoverageAsync(filePaths, type, ct);
-                var sb = new StringBuilder();
-                sb.AppendLine($"Code Coverage Summary: Line Coverage = {cov.LineCoveragePercent:F1}%, Branch Coverage = {cov.BranchCoveragePercent:F1}%.");
-                foreach (var file in cov.UncoveredFiles.Take(15))
                 {
-                    var lines = string.Join(", ", file.UncoveredLines.Take(20));
-                    sb.AppendLine($"- `{file.FilePath}` ({file.LineCoveragePercent:F1}% line coverage) — Uncovered lines: [{lines}]");
-                }
+                    var cov = await ParseCoverageAsync(filePaths, type, ct);
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"Code Coverage Summary: Line Coverage = {cov.LineCoveragePercent:F1}%, Branch Coverage = {cov.BranchCoveragePercent:F1}%.");
+                    foreach (var file in cov.UncoveredFiles.Take(15))
+                    {
+                        var lines = string.Join(", ", file.UncoveredLines.Take(20));
+                        sb.AppendLine($"- `{file.FilePath}` ({file.LineCoveragePercent:F1}% line coverage) — Uncovered lines: [{lines}]");
+                    }
 
-                return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars), CoverageSummary: cov);
-            }
+                    return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars), CoverageSummary: cov);
+                }
 
             case "sarif":
-            {
-                var findings = new List<SarifFinding>();
-                foreach (var fp in filePaths)
                 {
-                    var parsed = await SarifParser.ParseFileAsync(fp, ct);
-                    findings.AddRange(parsed);
-                }
+                    var findings = new List<SarifFinding>();
+                    foreach (var fp in filePaths)
+                    {
+                        var parsed = await SarifParser.ParseFileAsync(fp, ct);
+                        findings.AddRange(parsed);
+                    }
 
-                var sb = new StringBuilder();
-                sb.AppendLine($"SARIF Static Scan Summary: {findings.Count} alert(s).");
-                foreach (var f in findings.Take(15))
-                {
-                    sb.AppendLine($"- [{f.Level}] {f.RuleId} at `{f.FilePath}:{f.StartLine}` — {f.Message}");
-                }
+                    var sb = new StringBuilder();
+                    sb.AppendLine($"SARIF Static Scan Summary: {findings.Count} alert(s).");
+                    foreach (var f in findings.Take(15))
+                    {
+                        sb.AppendLine($"- [{f.Level}] {f.RuleId} at `{f.FilePath}:{f.StartLine}` — {f.Message}");
+                    }
 
-                return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars), SarifFindings: findings);
-            }
+                    return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars), SarifFindings: findings);
+                }
 
             default:
-            {
-                var sb = new StringBuilder();
-                foreach (var fp in filePaths.Take(5))
                 {
-                    var content = await File.ReadAllTextAsync(fp, ct);
-                    var rel = Path.GetRelativePath(rootDir, fp).Replace('\\', '/');
-                    sb.AppendLine($"File `{rel}`:");
-                    sb.AppendLine(TruncateText(content, Math.Max(1000, maxChars / Math.Max(1, filePaths.Count))));
-                }
+                    var sb = new StringBuilder();
+                    foreach (var fp in filePaths.Take(5))
+                    {
+                        var content = await File.ReadAllTextAsync(fp, ct);
+                        var rel = Path.GetRelativePath(rootDir, fp).Replace('\\', '/');
+                        sb.AppendLine($"File `{rel}`:");
+                        sb.AppendLine(TruncateText(content, Math.Max(1000, maxChars / Math.Max(1, filePaths.Count))));
+                    }
 
-                return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars));
-            }
+                    return new IngestedPipelineArtifact(id, type, relPaths, TruncateText(sb.ToString().Trim(), maxChars));
+                }
         }
     }
 
