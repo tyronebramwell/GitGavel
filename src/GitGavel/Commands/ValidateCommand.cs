@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Diagnostics.CodeAnalysis;
 using GitGavel.Configuration;
+using GitGavel.Workflow;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -14,6 +15,10 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
         [Description("Path to .gitgavel.yml configuration file to validate.")]
         [DefaultValue(".gitgavel.yml")]
         public string ConfigPath { get; set; } = ".gitgavel.yml";
+
+        [CommandOption("-w|--workflow <PATH>")]
+        [Description("Optional path to .gitgavel.workflow.yml DAG workflow file to validate.")]
+        public string? WorkflowPath { get; set; }
 
         [CommandOption("--allow-external-paths")]
         [Description("Explicitly allow configuration or reporting paths outside the current directory.")]
@@ -53,7 +58,26 @@ public class ValidateCommand : AsyncCommand<ValidateCommand.Settings>
             return 1;
         }
 
-        var dir = Path.GetDirectoryName(Path.GetFullPath(configPath));
+        var dir = Path.GetDirectoryName(Path.GetFullPath(configPath)) ?? Directory.GetCurrentDirectory();
+        var workflowFileToCheck = settings.WorkflowPath ?? config.WorkflowFile;
+        if (!string.IsNullOrWhiteSpace(workflowFileToCheck))
+        {
+            try
+            {
+                var resolvedWf = PathSecurity.ResolveAndVerifyWithinRoot(workflowFileToCheck, dir, settings.AllowExternalPaths);
+                if (File.Exists(resolvedWf) || !string.IsNullOrWhiteSpace(settings.WorkflowPath))
+                {
+                    var wf = await WorkflowLoader.LoadFromFileAsync(workflowFileToCheck, dir, settings.AllowExternalPaths, cancellationToken);
+                    AnsiConsole.MarkupLine($"[green]✓[/] Workflow DAG '[cyan]{Markup.Escape(wf.Name)}[/]' ({wf.Nodes.Count} nodes) is acyclic and valid.");
+                }
+            }
+            catch (Exception ex)
+            {
+                AnsiConsole.MarkupLine($"[red]✗[/] Workflow DAG validation failed: {Markup.Escape(ex.Message)}");
+                return 1;
+            }
+        }
+
         DotEnvLoader.Load(dir, settings.AllowExternalPaths);
 
         var envTable = new Table().Border(TableBorder.Rounded);

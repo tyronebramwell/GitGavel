@@ -1,5 +1,7 @@
 using GitGavel.Configuration;
 using GitGavel.Git;
+using GitGavel.Skills;
+using GitGavel.System2.Agents;
 using Microsoft.Extensions.FileSystemGlobbing;
 using Microsoft.Extensions.FileSystemGlobbing.Abstractions;
 
@@ -11,10 +13,12 @@ public class FileScanner
     private const int MaxConcurrentFileReads = 16;
 
     private readonly IGitService _gitService;
+    private readonly SkillResolver _skillResolver;
 
-    public FileScanner(IGitService? gitService = null)
+    public FileScanner(IGitService? gitService = null, SkillResolver? skillResolver = null)
     {
         _gitService = gitService ?? new GitService();
+        _skillResolver = skillResolver ?? new SkillResolver();
     }
 
     public async Task<RepoContext> ScanAsync(
@@ -43,6 +47,29 @@ public class FileScanner
         var sourceFiles = await ScanSourceFilesAsync(rootDirectory, dirWrapper, config, maxFileSizeBytes, allowExternalPaths, ct);
         var testFiles = await ScanTestFilesAsync(rootDirectory, dirWrapper, config, maxFileSizeBytes, allowExternalPaths, ct);
         var sarifFindings = await LoadSarifReportsAsync(rootDirectory, config, allowExternalPaths, ct);
+        var pipelineArtifacts = await PipelineArtifactIngestor.IngestAsync(rootDirectory, config.Artifacts, allowExternalPaths, ct);
+
+        foreach (var artifact in pipelineArtifacts.Artifacts)
+        {
+            if (artifact.SarifFindings is { Count: > 0 })
+            {
+                sarifFindings.AddRange(artifact.SarifFindings);
+            }
+        }
+
+        var agentDefinitions = AgentDefinitionRegistry.LoadAllDefinitions(config, rootDirectory, allowExternalPaths: allowExternalPaths);
+        var requiredSkillRefs = agentDefinitions.Values
+            .Where(a => a.Enabled && a.Skills != null)
+            .SelectMany(a => a.Skills)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+
+        var skillsContext = await _skillResolver.ResolveSkillsOnDemandAsync(
+            rootDirectory,
+            config.Skills,
+            requiredSkillRefs,
+            allowExternalPaths,
+            ct);
 
         var astSummaries = AstAnalyzer.AnalyzeAll(sourceFiles);
 
@@ -59,7 +86,9 @@ public class FileScanner
             TestFiles = testFiles,
             SarifFindings = sarifFindings,
             AstSummaries = astSummaries,
-            RecentCommits = recentCommits
+            RecentCommits = recentCommits,
+            PipelineArtifacts = pipelineArtifacts,
+            SkillsContext = skillsContext
         };
     }
 

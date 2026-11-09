@@ -11,13 +11,18 @@ public class IssueResolutionAgent
 {
     private readonly ILlmClient _llmClient;
     private readonly string _model;
+    private readonly AgentDefinition _definition;
 
-    public string Name => "IssueResolutionAuditor";
+    public string Name => _definition.Name ?? "IssueResolutionAuditor";
 
-    public IssueResolutionAgent(ILlmClient llmClient, string model = LlmModelDefaults.DefaultGeminiFlashModel)
+    public IssueResolutionAgent(
+        ILlmClient llmClient,
+        string model = LlmModelDefaults.DefaultGeminiFlashModel,
+        AgentDefinition? definition = null)
     {
         _llmClient = llmClient;
-        _model = LlmModelDefaults.ResolveSubagentModel(model, LlmModelDefaults.DefaultGeminiFlashModel);
+        _definition = definition ?? StandardAgentYamlCatalog.GetStandardDefinition("issueResolution");
+        _model = LlmModelDefaults.ResolveSubagentModel(_definition.Model ?? model, LlmModelDefaults.DefaultGeminiFlashModel);
     }
 
     public async Task<IssueResolutionAgentResult> EvaluateOpenIssuesAsync(
@@ -40,8 +45,9 @@ public class IssueResolutionAgent
         }
 
         var promptBuilder = new StringBuilder();
-        promptBuilder.AppendLine("You are the Issue Resolution Agent. Audit the following open GitHub issues against the current codebase and recent git commit history.");
-        promptBuilder.AppendLine("Identify which open issues have been completed/fixed, explain concisely how each issue was fixed, and list the specific git commit SHA(s) and commit messages that resolved them.");
+        promptBuilder.AppendLine((_definition.UserPromptIntro ?? string.Empty).Trim());
+
+        AgentPromptBuilder.AppendAgentEnrichments(promptBuilder, context, _definition);
 
         promptBuilder.AppendLine();
         promptBuilder.AppendLine("### Open GitHub Issues:");
@@ -74,19 +80,7 @@ public class IssueResolutionAgent
         promptBuilder.AppendLine("(File contents omitted for context size limits. Rely on the AST Symbol Map and Git Commit History above to determine issue resolution.)");
 
         promptBuilder.AppendLine();
-        promptBuilder.AppendLine("Return a JSON array of resolved issues with the following schema:");
-        promptBuilder.AppendLine("""
-        [
-          {
-            "issueNumber": 42,
-            "issueTitle": "Title of the issue",
-            "isResolved": true,
-            "howItWasFixed": "Concise explanation of how the issue was fixed in the codebase",
-            "resolvingCommitShas": ["cfad09afc6f436fb3af957ff2d94eba2d3e1ea36"],
-            "resolvingCommitSummaries": ["`cfad09a` — *fix(tests): isolate CI environment variables in GitService fallback test*"]
-          }
-        ]
-        """);
+        promptBuilder.AppendLine((_definition.JsonSchemaInstructions ?? string.Empty).Trim());
 
         try
         {
@@ -94,7 +88,7 @@ public class IssueResolutionAgent
             {
                 AgentName = Name,
                 Prompt = promptBuilder.ToString(),
-                SystemPrompt = "You are a senior maintainer verifying whether open GitHub issues have been completed in recent commits. Return strictly a JSON array of resolution assessments.",
+                SystemPrompt = _definition.SystemPrompt ?? "You are a senior maintainer verifying whether open GitHub issues have been completed in recent commits. Return strictly a JSON array of resolution assessments.",
                 Model = _model,
                 ExpectJson = true
             }, ct);

@@ -1,4 +1,5 @@
 using GitGavel.Git;
+using GitGavel.Skills;
 using GitGavel.System1.Models;
 using GitGavel.System2.Models;
 
@@ -32,6 +33,9 @@ public record RepoContext
     public IReadOnlyList<FileAstSummary> AstSummaries { get; init; } = [];
     public IReadOnlyList<GitCommitRecord> RecentCommits { get; init; } = [];
     public PullRequestContext? ActivePullRequest { get; init; }
+    public PipelineArtifactsContext PipelineArtifacts { get; init; } = new();
+    public SkillsContext SkillsContext { get; init; } = new();
+    public IReadOnlyList<FindingCandidate> UpstreamFindings { get; init; } = [];
     public bool IsPullRequestMode => ActivePullRequest != null;
     public long TotalLinesOfCode => SourceFiles.Sum(s => (long)s.LineCount);
     public long TotalTestLinesOfCode => TestFiles.Sum(t => (long)t.LineCount);
