@@ -61,7 +61,7 @@ jobs:
       - name: Build Solution & Export Roslyn SARIF
         run: |
           dotnet build --no-restore --configuration Release \
-            /p:ErrorLog=$(pwd)/artifacts/sarif/roslyn.sarif,version=2.1
+            "/p:ErrorLog=$(pwd)/artifacts/sarif/roslyn.sarif%2Cversion=2.1"
 
       # 4. TESTS + RAW COVERAGE: Outputs .trx and Cobertura XML
       - name: Run Unit Tests & Collect Coverage

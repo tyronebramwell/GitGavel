@@ -566,4 +566,44 @@ public class WorkflowSkillsArtifactsAndYamlAgentsTests
         // so criticalRoot (SecurityAuditor) must be dispatched before leafNode (RefactoringAgent)!
         executionOrder.First().Should().Be("SecurityAuditor");
     }
+
+    [Fact]
+    public void SarifParser_ParsesSarif10StringMessageAndResultFile_AndSarif21ObjectMessage()
+    {
+        var sarif10 = """
+            {
+              "version": "1.0.0",
+              "runs": [
+                {
+                  "results": [
+                    {
+                      "ruleId": "CS8600",
+                      "level": "warning",
+                      "message": "Converting null literal or possible null value to non-nullable type.",
+                      "locations": [
+                        {
+                          "resultFile": {
+                            "uri": "src/Program.cs",
+                            "region": {
+                              "startLine": 14,
+                              "endLine": 16
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+            """;
+
+        var findings = SarifParser.Parse(sarif10);
+        findings.Should().ContainSingle();
+        findings[0].RuleId.Should().Be("CS8600");
+        findings[0].Message.Should().Be("Converting null literal or possible null value to non-nullable type.");
+        findings[0].FilePath.Should().Be("src/Program.cs");
+        findings[0].StartLine.Should().Be(14);
+        findings[0].EndLine.Should().Be(16);
+    }
 }
