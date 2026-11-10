@@ -44,7 +44,34 @@ public class AuditRunReporter : BaseMarkdownReporter
         sb.AppendLine($"| **Total Lines of Code** | {ctx.RepoContext.TotalLinesOfCode:N0} LOC |");
         sb.AppendLine($"| **Git Commits Inspected** | {ctx.RepoContext.RecentCommits.Count} commits |");
         sb.AppendLine($"| **SARIF Reports Ingested** | {ctx.RepoContext.SarifFindings.Count} findings |");
+        if (ctx.RepoContext.PipelineArtifacts?.Artifacts.Count > 0)
+        {
+            sb.AppendLine($"| **CI Pipeline Run Artifacts** | {ctx.RepoContext.PipelineArtifacts.Artifacts.Count} artifact source(s) |");
+        }
+        if (ctx.RepoContext.SkillsContext?.Skills.Count > 0)
+        {
+            sb.AppendLine($"| **Agent Skills Loaded** | {ctx.RepoContext.SkillsContext.Skills.Count} skill(s) from {ctx.RepoContext.SkillsContext.Repositories.Count} repo(s) |");
+        }
         sb.AppendLine();
+
+        if (ctx.Orchestration.WorkflowSnapshot != null)
+        {
+            var snap = ctx.Orchestration.WorkflowSnapshot;
+            sb.AppendLine($"## 2.1 Workflow DAG State Machine (`{snap.WorkflowName}`)");
+            sb.AppendLine();
+            sb.AppendLine("| Node ID | Name | System | Level | Status | Dependencies (`dependsOn` / `inputsFrom`) | Duration |");
+            sb.AppendLine("| :--- | :--- | :---: | :---: | :---: | :--- | :---: |");
+            foreach (var n in snap.Nodes)
+            {
+                var deps = n.InputsFrom.Count > 0
+                    ? $"inputsFrom: [{string.Join(", ", n.InputsFrom)}]"
+                    : n.DependsOn.Count > 0
+                        ? $"dependsOn: [{string.Join(", ", n.DependsOn)}]"
+                        : "Root";
+                sb.AppendLine($"| `{n.Id}` | **{n.Name}** | `{n.System}` | {n.TopologicalLevel} | `{n.Status}` | {deps} | {n.ElapsedMs}ms |");
+            }
+            sb.AppendLine();
+        }
 
         // 3. Jev Subagent Pre-Execution Gating
         if (ctx.Orchestration.GatingResult != null)

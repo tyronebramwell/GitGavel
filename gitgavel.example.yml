@@ -1,5 +1,13 @@
 version: 1
 
+# Optional path to separate DAG workflow definition file (or override via --workflow <PATH>)
+workflowFile: ".gitgavel.workflow.yml"
+
+# Live Console Workflow & Agent Status Diagram
+console:
+  diagram: true                       # Render topological workflow & agent state diagram in terminal
+  liveUpdates: true                   # Live Spectre.Console updates (auto-falls back in non-interactive CI)
+
 # Scope of files to audit
 scope:
   specs:
@@ -11,23 +19,64 @@ scope:
     include: ["**/*.Tests/**/*.cs", "tests/**/*.cs", "**/*.spec.ts", "**/*.test.ts", "tests/**/*.py", "e2e/**"]
     exclude: ["**/bin/**", "**/obj/**", "**/.git/**"]
 
+# Current CI Pipeline Run Artifact Ingestion
+artifacts:
+  fromCurrentGithubRun: true          # Fetch named artifacts from active $GITHUB_RUN_ID via GitHub API if not on disk
+  maxArtifactContextChars: 12000      # Cap injected artifact summary characters per agent prompt
+  sources:
+    - id: "test-results"
+      type: "trx"                     # options: "trx" | "junit" | "cobertura" | "lcov" | "sarif" | "json" | "text"
+      paths: ["TestResults/**/*.trx", "artifacts/test-results/**/*.xml"]
+      githubArtifactName: "test-results-artifact"
+    - id: "coverage-report"
+      type: "cobertura"
+      paths: ["TestResults/**/coverage.cobertura.xml"]
+      githubArtifactName: "coverage-artifact"
+    - id: "semgrep-sarif"
+      type: "sarif"
+      paths: ["reports/semgrep.sarif"]
+      githubArtifactName: "sarif-report"
+    - id: "build-warnings"
+      type: "text"
+      paths: ["artifacts/build-warnings.log"]
+
+# On-Demand Multi-Repository Agent Skills
+skills:
+  cacheDir: ".gitgavel/cache/skills"
+  fetchOnDemand: true                 # Shallow-clone referenced skill repos on-demand during pipeline run
+  maxSkillCharsPerAgent: 16000
+  repositories:
+    - alias: "team-skills"
+      git: "https://github.com/my-org/engineering-skills.git"
+      ref: "main"
+      path: "skills"
+      authEnv: "GH_TOKEN"             # Optional token env var for private skill repositories
+    - alias: "local"
+      localPath: "./.gitgavel/skills"
+
 # System 2 Subagents (Generative LLMs)
 subagents:
-  apiKeyEnv: "AI_API_KEY" # Env var holding your LLM key (e.g. AI_API_KEY or GEMINI_API_KEY)
-  timeoutSeconds: 300     # Global LLM timeout in seconds (default: 300s / 5 mins)
+  apiKeyEnv: "AI_API_KEY"             # Env var holding your LLM key (e.g. AI_API_KEY or GEMINI_API_KEY)
+  definitionsPath: "./.gitgavel/agents" # Directory containing modifiable *.agent.yml files for standard & custom agents
+  timeoutSeconds: 300                 # Global LLM timeout in seconds (default: 300s / 5 mins)
   specDrift:
     enabled: true
     provider: "gemini"
     model: "gemini-2.5-pro"
+    skills: ["team-skills/openapi-governance", "local/adr-compliance"]
   security:
     enabled: true
     provider: "gemini"
     model: "gemini-2.5-pro"
     sarifReports: ["reports/semgrep.sarif"]
+    artifacts: ["semgrep-sarif"]
+    skills: ["team-skills/owasp-dotnet", "team-skills/github-actions-hardening"]
   reliability:
     enabled: true                     # Phase 8: Reliability & Performance Subagent
     provider: "gemini"
     model: "gemini-3.1-pro-preview"
+    artifacts: ["build-warnings"]
+    skills: ["team-skills/dotnet-async-concurrency"]
   refactoring:
     enabled: true
     provider: "gemini"
@@ -37,6 +86,8 @@ subagents:
     provider: "gemini"
     model: "gemini-2.5-pro"
     tiers: ["unit", "integration", "e2e"]
+    artifacts: ["test-results", "coverage-report"]
+    skills: ["team-skills/xunit-fluentassertions"]
   issueResolution:
     enabled: true
     provider: "gemini"
@@ -45,11 +96,12 @@ subagents:
     commitLookbackCount: 50
     includeCommitLinks: true
 
-# System 1 Triage Gatekeeper & Pre-Execution Router (Jev Decision Engine)
+# System 1 Triage Gatekeeper & Pre-Execution Router (Jev & Non-Jev Gates)
 triage:
-  engine: "jev" # options: "jev" | "llm-synthesizer"
+  engine: "jev" # options: "jev" | "deterministic" | "llm-synthesizer"
   subagentGating:
-    enabled: true                     # Pre-screen subagents with Jev to reduce token usage
+    enabled: true                     # Pre-screen subagents with System 1 gates to reduce token usage
+    engine: "deterministic-then-jev"  # options: "jev" | "deterministic" | "llm" | "deterministic-then-jev"
     minConfidence: 0.50               # Minimum Jev Noul probability to activate subagent (default: 0.50)
     alwaysRunSecurityOnSarifAlerts: true # Hard safety fallback: force SecurityAuditor if SARIF findings exist
     alwaysRunSpecDriftOnSpecChanges: true # Hard safety fallback: force SpecDrift if specs modified

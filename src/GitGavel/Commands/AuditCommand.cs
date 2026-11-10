@@ -12,6 +12,8 @@ using GitGavel.System1.Engines;
 using GitGavel.System1.Models;
 using GitGavel.Reporting;
 using GitGavel.GitHub;
+using GitGavel.System2.Agents;
+using GitGavel.Workflow;
 using Spectre.Console;
 using Spectre.Console.Cli;
 
@@ -75,6 +77,18 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         [CommandOption("--all-agents|--no-gate")]
         [Description("Bypass Jev pre-execution subagent gating and execute all enabled subagents.")]
         public bool AllAgents { get; set; }
+
+        [CommandOption("-w|--workflow <PATH>")]
+        [Description("Optional path to separate .gitgavel.workflow.yml DAG workflow definition file.")]
+        public string? WorkflowPath { get; set; }
+
+        [CommandOption("--agents <PATH>")]
+        [Description("Optional path to directory or file containing declarative *.agent.yml definitions.")]
+        public string? AgentsPath { get; set; }
+
+        [CommandOption("--max-concurrency <COUNT>")]
+        [Description("Override maximum parallel System 2 workflow steps.")]
+        public int? MaxConcurrency { get; set; }
     }
 
     public override async Task<int> ExecuteAsync([NotNull] CommandContext context, [NotNull] Settings settings, CancellationToken cancellationToken)
@@ -187,6 +201,14 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         scopeTable.AddRow("Automated Test Files", repoContext.TestFiles.Count.ToString(), repoContext.IsPullRequestMode ? $"{repoContext.TotalTestLinesOfCode:N0} test LOC (PR diff-scoped)" : $"{repoContext.TotalTestLinesOfCode:N0} test LOC");
         scopeTable.AddRow("Recent Git Commits", repoContext.RecentCommits.Count.ToString(), $"Lookback window: {config.Subagents.IssueResolution.CommitLookbackCount}");
         scopeTable.AddRow("SARIF Findings", repoContext.SarifFindings.Count.ToString(), $"{repoContext.SarifFindings.Count} static security alerts loaded");
+        if (repoContext.PipelineArtifacts.Artifacts.Count > 0)
+        {
+            scopeTable.AddRow("CI Run Artifacts", repoContext.PipelineArtifacts.Artifacts.Count.ToString(), string.Join(", ", repoContext.PipelineArtifacts.Artifacts.Select(a => $"{a.Id} ({a.Type})")));
+        }
+        if (repoContext.SkillsContext.Skills.Count > 0)
+        {
+            scopeTable.AddRow("Loaded Agent Skills", repoContext.SkillsContext.Skills.Count.ToString(), string.Join(", ", repoContext.SkillsContext.Skills.Select(s => s.Id)));
+        }
 
         AnsiConsole.Write(scopeTable);
         AnsiConsole.WriteLine();
@@ -195,6 +217,24 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         if (settings.AllAgents)
         {
             config.Triage.SubagentGating.Enabled = false;
+        }
+
+        var agentDefinitions = AgentDefinitionRegistry.LoadAllDefinitions(
+            config,
+            repoDir,
+            settings.AgentsPath,
+            settings.AllowExternalPaths);
+
+        var workflow = WorkflowLoader.ResolveOrBuildDefault(
+            config,
+            agentDefinitions,
+            repoDir,
+            settings.WorkflowPath,
+            settings.AllowExternalPaths);
+
+        if (settings.MaxConcurrency is > 0)
+        {
+            workflow.Concurrency.MaxParallelSteps = settings.MaxConcurrency.Value;
         }
 
         var jevApiKey = KeyResolver.Resolve(config.Triage.Jev.ApiKeyEnv, "JEV_API_KEY");
@@ -212,14 +252,18 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
         ISubagentOrchestrator orchestrator = _injectedOrchestrator ?? new SubagentOrchestrator(llmClientFactory, triageEngine);
         OrchestrationResult orchestrationResult = null!;
 
-        var enabledAgents = new List<string>();
-        if (config.Subagents.SpecDrift?.Enabled == true) enabledAgents.Add("SpecDriftAgent");
-        if (config.Subagents.Security?.Enabled == true) enabledAgents.Add("SecurityAuditor");
-        if (config.Subagents.Reliability?.Enabled == true) enabledAgents.Add("ReliabilityAgent");
-        if (config.Subagents.Refactoring?.Enabled == true) enabledAgents.Add("RefactoringAgent");
-        if (config.Subagents.Tests?.Enabled == true) enabledAgents.Add("TestSentinelAgent");
+        var enabledAgents = workflow.Nodes
+            .Where(n => string.Equals(n.System, "system2", StringComparison.OrdinalIgnoreCase) && n.Enabled)
+            .Select(n =>
+            {
+                var key = AgentDefinitionRegistry.NormalizeStandardOrCustomKey(n.Agent, n.Id);
+                return agentDefinitions.TryGetValue(key, out var def) ? (def.Enabled ? def.Name : null) : (n.Name ?? n.Id);
+            })
+            .Where(name => !string.IsNullOrWhiteSpace(name))
+            .Select(name => name!)
+            .ToList();
 
-        AnsiConsole.MarkupLine($"[cyan]i[/] Launching [bold]{enabledAgents.Count}[/] System 2 Subagents concurrently: {string.Join(", ", enabledAgents.Select(a => $"[bold]{a}[/]"))}...");
+        AnsiConsole.MarkupLine($"[cyan]i[/] Launching [bold]{enabledAgents.Count}[/] System 2 Subagents via DAG Workflow ([cyan]{Markup.Escape(workflow.Name)}[/]): {string.Join(", ", enabledAgents.Select(a => $"[bold]{Markup.Escape(a)}[/]"))}...");
         AnsiConsole.WriteLine();
 
         var pending = new HashSet<string>();
@@ -281,13 +325,31 @@ public class AuditCommand : AsyncCommand<AuditCommand.Settings>
             .StartAsync($"Executing System 2 Generative Subagents ({enabledAgents.Count} running)...", async ctx =>
             {
                 statusContext = ctx;
-                orchestrationResult = await orchestrator.RunAllAsync(repoContext, config, onProgress, cancellationToken);
+                orchestrationResult = await orchestrator.RunWorkflowAsync(
+                    repoContext,
+                    config,
+                    workflow,
+                    agentDefinitions,
+                    onProgress,
+                    onSnapshotUpdated: null,
+                    triageEngine: triageEngine,
+                    ct: cancellationToken);
+                if (orchestrationResult == null)
+                {
+                    orchestrationResult = await orchestrator.RunAllAsync(repoContext, config, onProgress, cancellationToken);
+                }
                 if (orchestrationResult == null)
                 {
                     orchestrationResult = await orchestrator.RunAllAsync(repoContext, config, cancellationToken);
                 }
                 orchestrationResult ??= new OrchestrationResult();
             });
+
+        if (config.Console.Diagram && orchestrationResult.WorkflowSnapshot != null)
+        {
+            AnsiConsole.WriteLine();
+            AnsiConsole.Write(ConsoleWorkflowDiagramRenderer.BuildRenderable(orchestrationResult.WorkflowSnapshot));
+        }
 
         AnsiConsole.WriteLine();
         AnsiConsole.MarkupLine($"[green]✓[/] System 2 Discovery complete in [cyan]{orchestrationResult.TotalDurationMs / 1000.0:F1}s[/] (Total Tokens: [yellow]{orchestrationResult.TotalTokens:N0}[/], Findings: [bold]{orchestrationResult.AllFindings.Count}[/])");

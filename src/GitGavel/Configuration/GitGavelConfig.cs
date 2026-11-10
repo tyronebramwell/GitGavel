@@ -3,11 +3,54 @@ namespace GitGavel.Configuration;
 public class GitGavelConfig
 {
     public int Version { get; set; } = 1;
+    public string? WorkflowFile { get; set; }
+    public ConsoleConfig Console { get; set; } = new();
     public ScopeConfig Scope { get; set; } = new();
+    public ArtifactsConfig Artifacts { get; set; } = new();
+    public SkillsConfig Skills { get; set; } = new();
     public SubagentsConfig Subagents { get; set; } = new();
     public TriageConfig Triage { get; set; } = new();
     public ReportingConfig Reporting { get; set; } = new();
     public GitHubConfig Github { get; set; } = new();
+}
+
+public class ConsoleConfig
+{
+    public bool Diagram { get; set; } = true;
+    public bool LiveUpdates { get; set; } = true;
+}
+
+public class ArtifactsConfig
+{
+    public bool FromCurrentGithubRun { get; set; } = true;
+    public int MaxArtifactContextChars { get; set; } = 12000;
+    public List<ArtifactSourceConfig> Sources { get; set; } = [];
+}
+
+public class ArtifactSourceConfig
+{
+    public string Id { get; set; } = string.Empty;
+    public string Type { get; set; } = "text"; // "trx" | "junit" | "cobertura" | "lcov" | "sarif" | "json" | "text"
+    public List<string> Paths { get; set; } = [];
+    public string? GithubArtifactName { get; set; }
+}
+
+public class SkillsConfig
+{
+    public string CacheDir { get; set; } = ".gitgavel/cache/skills";
+    public bool FetchOnDemand { get; set; } = true;
+    public int MaxSkillCharsPerAgent { get; set; } = 16000;
+    public List<SkillRepositoryConfig> Repositories { get; set; } = [];
+}
+
+public class SkillRepositoryConfig
+{
+    public string Alias { get; set; } = string.Empty;
+    public string? Git { get; set; }
+    public string Ref { get; set; } = "main";
+    public string? Path { get; set; }
+    public string? AuthEnv { get; set; }
+    public string? LocalPath { get; set; }
 }
 
 public class ScopeConfig
@@ -38,7 +81,9 @@ public class TestsScopeConfig
 public class SubagentsConfig
 {
     public string ApiKeyEnv { get; set; } = "AI_API_KEY";
+    public string? DefinitionsPath { get; set; }
     public int TimeoutSeconds { get; set; } = 300;
+    public List<AgentDefinition> Custom { get; set; } = [];
 
     public SubagentSettings SpecDrift { get; set; } = new()
     {
@@ -91,6 +136,11 @@ public class SubagentSettings
     public string Provider { get; set; } = "gemini";
     public string Model { get; set; } = "gemini-2.5-pro";
     public int? TimeoutSeconds { get; set; }
+    public List<string> Skills { get; set; } = [];
+    public List<string> Artifacts { get; set; } = [];
+    public string? SystemPrompt { get; set; }
+    public string? AdditionalInstructions { get; set; }
+    public string? GatingQuestion { get; set; }
 }
 
 public class SecuritySubagentSettings : SubagentSettings
@@ -121,6 +171,7 @@ public class TriageConfig
 public class SubagentGatingConfig
 {
     public bool Enabled { get; set; } = true;
+    public string Engine { get; set; } = "deterministic-then-jev"; // "jev" | "deterministic" | "llm" | "deterministic-then-jev"
     public double MinConfidence { get; set; } = 0.50;
     public bool AlwaysRunSecurityOnSarifAlerts { get; set; } = true;
     public bool AlwaysRunSpecDriftOnSpecChanges { get; set; } = true;

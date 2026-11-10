@@ -1,3 +1,4 @@
+using GitGavel.Configuration;
 using GitGavel.Discovery;
 using GitGavel.System2.Abstractions;
 using GitGavel.System2.Models;
@@ -8,15 +9,17 @@ public abstract class BaseLlmAgent : ISubagent
 {
     protected readonly ILlmClient LlmClient;
     protected readonly string Model;
+    protected readonly AgentDefinition? Definition;
 
     public abstract string Name { get; }
     protected abstract string DefaultCategory { get; }
     protected abstract string SystemPrompt { get; }
 
-    protected BaseLlmAgent(ILlmClient llmClient, string model)
+    protected BaseLlmAgent(ILlmClient llmClient, string model, AgentDefinition? definition = null)
     {
         LlmClient = llmClient;
         Model = model;
+        Definition = definition;
     }
 
     protected virtual bool ShouldSkipExecution(RepoContext context) => false;

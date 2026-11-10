@@ -36,6 +36,21 @@ scope:
     - '**/artifacts/**'
     - 'artifacts/**'
     - '**/.git/**'
+artifacts:
+  enabled: true
+  sources:
+  - name: dotnet-test-results
+    type: trx
+    paths:
+    - 'artifacts/tests/**/*.trx'
+  - name: code-coverage
+    type: cobertura
+    paths:
+    - 'artifacts/tests/**/coverage.cobertura.xml'
+  - name: sast-sarif
+    type: sarif
+    paths:
+    - 'artifacts/sarif/*.sarif'
 subagents:
   apiKeyEnv: GEMINI_API_KEY
   specDrift:
@@ -50,10 +65,14 @@ subagents:
     - artifacts/sarif/gitleaks.sarif
     - artifacts/sarif/roslyn.sarif
     - artifacts/sarif/hadolint.sarif
+    artifacts:
+    - sast-sarif
     enabled: true
     provider: gemini
     model: gemini-2.5-flash
   reliability:
+    artifacts:
+    - dotnet-test-results
     enabled: true
     provider: gemini
     model: gemini-3.1-pro-preview
@@ -62,6 +81,9 @@ subagents:
     provider: gemini
     model: gemini-2.5-flash
   tests:
+    artifacts:
+    - dotnet-test-results
+    - code-coverage
     enabled: true
     provider: gemini
     model: gemini-2.5-flash

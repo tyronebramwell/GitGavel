@@ -1,5 +1,7 @@
 using System.Text;
+using GitGavel.Configuration;
 using GitGavel.Discovery;
+using GitGavel.System2.Models;
 
 namespace GitGavel.System2.Agents;
 
@@ -31,6 +33,59 @@ public static class AgentPromptBuilder
         {
             sb.AppendLine($"PULL REQUEST REVIEW MODE (PR #{context.ActivePullRequest.PrNumber}: {context.ActivePullRequest.Title}): Audit ONLY the changes introduced in this Pull Request's modified files and diff patches.");
             sb.AppendLine(antiScopeCreepRule);
+        }
+    }
+
+    public static void AppendAgentEnrichments(
+        StringBuilder sb,
+        RepoContext context,
+        AgentDefinition? definition)
+    {
+        if (definition != null && !string.IsNullOrWhiteSpace(definition.AdditionalInstructions))
+        {
+            sb.AppendLine();
+            sb.AppendLine("### Additional Project Instructions:");
+            sb.AppendLine(definition.AdditionalInstructions.Trim());
+        }
+
+        if (definition?.Skills is { Count: > 0 } && context.SkillsContext != null)
+        {
+            var skillsSection = context.SkillsContext.BuildPromptSectionForAgent(definition.Skills);
+            if (!string.IsNullOrWhiteSpace(skillsSection))
+            {
+                sb.AppendLine(skillsSection.TrimEnd());
+            }
+        }
+
+        if (definition?.Artifacts is { Count: > 0 } && context.PipelineArtifacts != null)
+        {
+            var artifactsSection = context.PipelineArtifacts.BuildPromptSectionForAgent(definition.Artifacts);
+            if (!string.IsNullOrWhiteSpace(artifactsSection))
+            {
+                sb.AppendLine(artifactsSection.TrimEnd());
+            }
+        }
+
+        if (context.UpstreamFindings is { Count: > 0 })
+        {
+            AppendUpstreamFindingsSection(sb, context.UpstreamFindings);
+        }
+    }
+
+    public static void AppendUpstreamFindingsSection(
+        StringBuilder sb,
+        IReadOnlyList<FindingCandidate> upstreamFindings)
+    {
+        if (upstreamFindings.Count == 0)
+        {
+            return;
+        }
+
+        sb.AppendLine();
+        sb.AppendLine("### Upstream Workflow Stage Findings (`inputsFrom`):");
+        foreach (var f in upstreamFindings.Take(25))
+        {
+            sb.AppendLine($"- [{f.Severity}] ({f.Category} by {f.AgentName}) `{f.FilePath}:{f.StartLine}` — **{f.Title}**: {f.Summary}");
         }
     }
 
