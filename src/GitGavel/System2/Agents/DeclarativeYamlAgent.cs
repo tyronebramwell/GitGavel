@@ -66,6 +66,20 @@ public class DeclarativeYamlAgent : BaseLlmAgent
         }
 
         var sb = new StringBuilder();
+        AppendIntroAndHeaderSections(sb, context);
+        AppendScopeSpecifications(sb, context, scope);
+        AppendScopeSarifFindings(sb, context, scope);
+
+        var hotspots = AppendScopeAstAndHotspots(sb, context, scope);
+        AppendScopeTestFiles(sb, context, scope);
+        AppendScopedSourceFiles(sb, context, scope, scopedFiles, hotspots);
+        AppendSchemaInstructions(sb);
+
+        return Task.FromResult(sb.ToString());
+    }
+
+    private void AppendIntroAndHeaderSections(StringBuilder sb, RepoContext context)
+    {
         var intro = !string.IsNullOrWhiteSpace(_definition.UserPromptIntro)
             ? _definition.UserPromptIntro
             : $"You are {Name}. Audit the scoped files and context for '{DefaultCategory}' issues.";
@@ -87,35 +101,51 @@ public class DeclarativeYamlAgent : BaseLlmAgent
         }
 
         AgentPromptBuilder.AppendAgentEnrichments(sb, context, _definition);
+    }
 
-        if (scope?.IncludeSpecs == true && (context.SpecFiles?.Count ?? 0) > 0)
+    private static void AppendScopeSpecifications(StringBuilder sb, RepoContext context, AgentScopeConfig? scope)
+    {
+        if (scope?.IncludeSpecs != true || (context.SpecFiles?.Count ?? 0) == 0)
         {
-            sb.AppendLine();
-            sb.AppendLine("### Specification Documents:");
-            foreach (var spec in context.SpecFiles!)
-            {
-                sb.AppendLine($"--- File: {spec.RelativePath} ---");
-                sb.AppendLine(AgentPromptBuilder.Truncate(spec.Content, AgentPromptBuilder.MaxSpecLength));
-            }
+            return;
         }
 
-        if (scope?.IncludeSarif == true && (context.SarifFindings?.Count ?? 0) > 0)
+        sb.AppendLine();
+        sb.AppendLine("### Specification Documents:");
+        foreach (var spec in context.SpecFiles!)
         {
-            sb.AppendLine();
-            sb.AppendLine("### Static Security Scan Findings (SARIF):");
-            foreach (var sarif in context.SarifFindings!.Take(15))
-            {
-                sb.AppendLine($"- Rule: {sarif.RuleId} | Level: {sarif.Level} | File: {sarif.FilePath}:{sarif.StartLine} | {sarif.Message}");
-            }
+            sb.AppendLine($"--- File: {spec.RelativePath} ---");
+            sb.AppendLine(AgentPromptBuilder.Truncate(spec.Content, AgentPromptBuilder.MaxSpecLength));
+        }
+    }
+
+    private static void AppendScopeSarifFindings(StringBuilder sb, RepoContext context, AgentScopeConfig? scope)
+    {
+        if (scope?.IncludeSarif != true || (context.SarifFindings?.Count ?? 0) == 0)
+        {
+            return;
         }
 
-        IReadOnlyList<FileAstSummary>? astSummaries = null;
-        if (scope?.IncludeAst == true || scope?.IncludeComplexityHotspots == true || scope?.PrioritizeHotspots == true)
+        sb.AppendLine();
+        sb.AppendLine("### Static Security Scan Findings (SARIF):");
+        foreach (var sarif in context.SarifFindings!.Take(15))
         {
-            astSummaries = AgentPromptBuilder.ResolveAstSummaries(context);
+            sb.AppendLine($"- Rule: {sarif.RuleId} | Level: {sarif.Level} | File: {sarif.FilePath}:{sarif.StartLine} | {sarif.Message}");
+        }
+    }
+
+    private static List<FileAstSummary> AppendScopeAstAndHotspots(
+        StringBuilder sb,
+        RepoContext context,
+        AgentScopeConfig? scope)
+    {
+        if (scope == null || (!scope.IncludeAst && !scope.IncludeComplexityHotspots && !scope.PrioritizeHotspots))
+        {
+            return [];
         }
 
-        if (scope?.IncludeAst == true && astSummaries != null)
+        var astSummaries = AgentPromptBuilder.ResolveAstSummaries(context);
+        if (scope.IncludeAst)
         {
             AgentPromptBuilder.AppendSymbolMap(
                 sb,
@@ -126,11 +156,8 @@ public class DeclarativeYamlAgent : BaseLlmAgent
                     : "### Repository Architecture & Symbol Map:");
         }
 
-        var hotspots = astSummaries != null
-            ? astSummaries.Where(s => s.IsComplexityHotspot).ToList()
-            : [];
-
-        if (scope?.IncludeComplexityHotspots == true && hotspots.Count > 0)
+        var hotspots = astSummaries.Where(s => s.IsComplexityHotspot).ToList();
+        if (scope.IncludeComplexityHotspots && hotspots.Count > 0)
         {
             sb.AppendLine();
             sb.AppendLine(!string.IsNullOrWhiteSpace(scope.HotspotsHeading)
@@ -143,31 +170,45 @@ public class DeclarativeYamlAgent : BaseLlmAgent
             }
         }
 
-        if (scope?.IncludeTests == true)
-        {
-            if ((context.TestFiles?.Count ?? 0) == 0)
-            {
-                sb.AppendLine();
-                sb.AppendLine("### Existing Automated Test Suite Files:");
-                sb.AppendLine("(No automated test files discovered in scope)");
-            }
-            else
-            {
-                var testSummaries = AstAnalyzer.AnalyzeAll(context.TestFiles!);
-                AgentPromptBuilder.AppendSymbolMap(
-                    sb,
-                    testSummaries,
-                    includeComplexity: false,
-                    heading: "### Existing Automated Test Suite Symbol Map (All Discovered Test Classes & Methods):");
+        return hotspots;
+    }
 
-                AgentPromptBuilder.AppendFilesSection(
-                    sb,
-                    context.TestFiles!,
-                    "### Existing Automated Test Suite Files:",
-                    fileLabelPrefix: "Test File");
-            }
+    private static void AppendScopeTestFiles(StringBuilder sb, RepoContext context, AgentScopeConfig? scope)
+    {
+        if (scope?.IncludeTests != true)
+        {
+            return;
         }
 
+        if ((context.TestFiles?.Count ?? 0) == 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("### Existing Automated Test Suite Files:");
+            sb.AppendLine("(No automated test files discovered in scope)");
+            return;
+        }
+
+        var testSummaries = AstAnalyzer.AnalyzeAll(context.TestFiles!);
+        AgentPromptBuilder.AppendSymbolMap(
+            sb,
+            testSummaries,
+            includeComplexity: false,
+            heading: "### Existing Automated Test Suite Symbol Map (All Discovered Test Classes & Methods):");
+
+        AgentPromptBuilder.AppendFilesSection(
+            sb,
+            context.TestFiles!,
+            "### Existing Automated Test Suite Files:",
+            fileLabelPrefix: "Test File");
+    }
+
+    private static void AppendScopedSourceFiles(
+        StringBuilder sb,
+        RepoContext context,
+        AgentScopeConfig? scope,
+        IReadOnlyList<ScannedFile> scopedFiles,
+        IReadOnlyList<FileAstSummary> hotspots)
+    {
         IEnumerable<ScannedFile> sourceFilesToInclude = scopedFiles;
         if (scope?.ExcludeTestSourceFiles == true)
         {
@@ -197,33 +238,33 @@ public class DeclarativeYamlAgent : BaseLlmAgent
             !string.IsNullOrWhiteSpace(scope?.SourceHeading) ? scope!.SourceHeading! : "### Scoped Source Files Under Audit:",
             fileLabelPrefix: !string.IsNullOrWhiteSpace(scope?.SourceLabelPrefix) ? scope!.SourceLabelPrefix! : "File",
             omitContentWhenDiffPresent: scope?.OmitDiffContentInPrMode == true && context.IsPullRequestMode);
+    }
 
+    private void AppendSchemaInstructions(StringBuilder sb)
+    {
         sb.AppendLine();
         if (!string.IsNullOrWhiteSpace(_definition.JsonSchemaInstructions))
         {
             sb.AppendLine(_definition.JsonSchemaInstructions.Trim());
-        }
-        else
-        {
-            sb.AppendLine($$"""
-            Return a JSON array of findings with the following schema:
-            [
-              {
-                "title": "Concise finding title",
-                "summary": "Clear explanation of the finding",
-                "category": "{{DefaultCategory}}",
-                "severity": "Critical | High | Medium | Low",
-                "filePath": "path/to/file",
-                "startLine": 10,
-                "endLine": 25,
-                "suggestedRemediation": "Concrete remediation snippet or action plan",
-                "details": "Detailed context"
-              }
-            ]
-            """);
+            return;
         }
 
-        return Task.FromResult(sb.ToString());
+        sb.AppendLine($$"""
+        Return a JSON array of findings with the following schema:
+        [
+          {
+            "title": "Concise finding title",
+            "summary": "Clear explanation of the finding",
+            "category": "{{DefaultCategory}}",
+            "severity": "Critical | High | Medium | Low",
+            "filePath": "path/to/file",
+            "startLine": 10,
+            "endLine": 25,
+            "suggestedRemediation": "Concrete remediation snippet or action plan",
+            "details": "Detailed context"
+          }
+        ]
+        """);
     }
 
     private string RenderTemplate(string template, RepoContext context, IReadOnlyList<ScannedFile> scopedFiles)

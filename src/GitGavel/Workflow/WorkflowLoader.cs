@@ -62,6 +62,11 @@ public static class WorkflowLoader
                 var yaml = File.ReadAllText(resolvedPath);
                 return LoadFromString(yaml);
             }
+
+            if (!string.IsNullOrWhiteSpace(explicitWorkflowPath))
+            {
+                throw new FileNotFoundException($"Explicitly requested workflow file not found: '{resolvedPath}'", resolvedPath);
+            }
         }
 
         return CreateDefaultWorkflow(config, agentDefinitions);

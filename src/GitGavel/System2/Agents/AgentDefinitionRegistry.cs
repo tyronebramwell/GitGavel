@@ -55,10 +55,21 @@ public static class AgentDefinitionRegistry
             {
                 var fullRoot = Path.GetFullPath(repoRootDir);
                 var resolved = PathSecurity.ResolveAndVerifyWithinRoot(targetPath, fullRoot, allowExternalPaths);
+                if (!string.IsNullOrWhiteSpace(explicitAgentsPath) &&
+                    !File.Exists(resolved) &&
+                    !Directory.Exists(resolved))
+                {
+                    throw new FileNotFoundException($"Explicitly requested agent definitions path not found: '{resolved}'", resolved);
+                }
+
                 LoadFromPathInto(resolved, fullRoot, allowExternalPaths, definitions);
             }
-            catch
+            catch (Exception ex)
             {
+                if (!string.IsNullOrWhiteSpace(explicitAgentsPath))
+                {
+                    throw new InvalidOperationException($"Failed to load explicit agent definitions from '{explicitAgentsPath}': {ex.Message}", ex);
+                }
                 // Ignore missing optional definitions path unless explicitly validated
             }
         }

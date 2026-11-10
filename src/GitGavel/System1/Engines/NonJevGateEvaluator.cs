@@ -33,16 +33,16 @@ public static partial class NonJevGateEvaluator
 
         var trimmed = expression.Trim();
 
-        // Split top-level OR (||)
-        var orParts = trimmed.Split("||", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (orParts.Length > 1)
+        // Split top-level OR (||) respecting single and double quotes
+        var orParts = SplitOutsideQuotes(trimmed, "||");
+        if (orParts.Count > 1)
         {
             return orParts.Any(part => EvaluateExpression(part, context, upstreamFindings));
         }
 
-        // Split top-level AND (&&)
-        var andParts = trimmed.Split("&&", StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (andParts.Length > 1)
+        // Split top-level AND (&&) respecting single and double quotes
+        var andParts = SplitOutsideQuotes(trimmed, "&&");
+        if (andParts.Count > 1)
         {
             return andParts.All(part => EvaluateExpression(part, context, upstreamFindings));
         }
@@ -52,76 +52,177 @@ public static partial class NonJevGateEvaluator
             return !EvaluateExpression(trimmed[1..], context, upstreamFindings);
         }
 
-        if (string.Equals(trimmed, "true", StringComparison.OrdinalIgnoreCase)) return true;
-        if (string.Equals(trimmed, "false", StringComparison.OrdinalIgnoreCase)) return false;
-        if (string.Equals(trimmed, "git.isPullRequest", StringComparison.OrdinalIgnoreCase)) return context.IsPullRequestMode;
+        return EvaluateAtomicClause(trimmed, context, upstreamFindings);
+    }
 
-        // 1. files.changedMatches('glob')
-        var globMatch = ChangedMatchesRegex().Match(trimmed);
-        if (globMatch.Success)
+    public static IReadOnlyList<string> SplitOutsideQuotes(string input, string delimiter)
+    {
+        var results = new List<string>();
+        var inSingleQuote = false;
+        var inDoubleQuote = false;
+        var lastSplitIndex = 0;
+
+        for (var i = 0; i <= input.Length - delimiter.Length; i++)
         {
-            var glob = globMatch.Groups["glob"].Value;
-            var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
-            matcher.AddInclude(glob);
-
-            var allFiles = (context.SourceFiles ?? [])
-                .Concat(context.SpecFiles ?? [])
-                .Concat(context.TestFiles ?? []);
-
-            return allFiles.Any(f => matcher.Match(f.RelativePath.Replace('\\', '/')).HasMatches);
-        }
-
-        // 2. inputs.findingsCount(severity >= 'High') > 0
-        var sevMatch = FindingsSeverityComparisonRegex().Match(trimmed);
-        if (sevMatch.Success)
-        {
-            var sevOp = sevMatch.Groups["op"].Value;
-            var targetSevRank = SeverityRank(sevMatch.Groups["sev"].Value);
-            var cmpOp = sevMatch.Groups["cmpOp"].Value;
-            var rhs = double.Parse(sevMatch.Groups["rhs"].Value, CultureInfo.InvariantCulture);
-
-            var findings = upstreamFindings ?? context.UpstreamFindings ?? [];
-            var count = findings.Count(f =>
+            var ch = input[i];
+            if (ch == '\'' && !inDoubleQuote)
             {
-                var rank = SeverityRank(f.Severity);
-                return sevOp switch
-                {
-                    ">=" => rank >= targetSevRank,
-                    ">" => rank > targetSevRank,
-                    "==" => rank == targetSevRank,
-                    _ => false
-                };
-            });
-
-            return CompareNumbers(count, cmpOp, rhs);
-        }
-
-        // 3. Standard LHS <op> RHS comparison
-        var cmpMatch = NumericOrBoolComparisonRegex().Match(trimmed);
-        if (cmpMatch.Success)
-        {
-            var lhsName = cmpMatch.Groups["lhs"].Value;
-            var op = cmpMatch.Groups["op"].Value;
-            var rhsRaw = cmpMatch.Groups["rhs"].Value;
-
-            var lhsValue = ResolveMetricValue(lhsName, context, upstreamFindings);
-            if (bool.TryParse(rhsRaw, out var rhsBool))
-            {
-                var lhsBool = Math.Abs(lhsValue) > 0.0001;
-                return op switch
-                {
-                    "==" => lhsBool == rhsBool,
-                    "!=" => lhsBool != rhsBool,
-                    _ => false
-                };
+                inSingleQuote = !inSingleQuote;
+                continue;
             }
 
-            if (double.TryParse(rhsRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var rhsNum))
+            if (ch == '"' && !inSingleQuote)
             {
-                return CompareNumbers(lhsValue, op, rhsNum);
+                inDoubleQuote = !inDoubleQuote;
+                continue;
+            }
+
+            if (!inSingleQuote && !inDoubleQuote &&
+                string.CompareOrdinal(input, i, delimiter, 0, delimiter.Length) == 0)
+            {
+                var segment = input[lastSplitIndex..i].Trim();
+                if (segment.Length > 0)
+                {
+                    results.Add(segment);
+                }
+
+                i += delimiter.Length - 1;
+                lastSplitIndex = i + 1;
             }
         }
 
+        var tail = input[lastSplitIndex..].Trim();
+        if (tail.Length > 0)
+        {
+            results.Add(tail);
+        }
+
+        return results;
+    }
+
+    private static bool EvaluateAtomicClause(
+        string clause,
+        RepoContext context,
+        IReadOnlyList<FindingCandidate>? upstreamFindings)
+    {
+        if (string.Equals(clause, "true", StringComparison.OrdinalIgnoreCase)) return true;
+        if (string.Equals(clause, "false", StringComparison.OrdinalIgnoreCase)) return false;
+        if (string.Equals(clause, "git.isPullRequest", StringComparison.OrdinalIgnoreCase)) return context.IsPullRequestMode;
+
+        if (TryEvaluateChangedMatchesClause(clause, context, out var globResult))
+        {
+            return globResult;
+        }
+
+        if (TryEvaluateFindingsSeverityClause(clause, context, upstreamFindings, out var sevResult))
+        {
+            return sevResult;
+        }
+
+        if (TryEvaluateMetricComparisonClause(clause, context, upstreamFindings, out var cmpResult))
+        {
+            return cmpResult;
+        }
+
+        return false;
+    }
+
+    private static bool TryEvaluateChangedMatchesClause(
+        string clause,
+        RepoContext context,
+        out bool result)
+    {
+        var globMatch = ChangedMatchesRegex().Match(clause);
+        if (!globMatch.Success)
+        {
+            result = false;
+            return false;
+        }
+
+        var glob = globMatch.Groups["glob"].Value;
+        var matcher = new Matcher(StringComparison.OrdinalIgnoreCase);
+        matcher.AddInclude(glob);
+
+        var allFiles = (context.SourceFiles ?? [])
+            .Concat(context.SpecFiles ?? [])
+            .Concat(context.TestFiles ?? []);
+
+        result = allFiles.Any(f => matcher.Match(f.RelativePath.Replace('\\', '/')).HasMatches);
+        return true;
+    }
+
+    private static bool TryEvaluateFindingsSeverityClause(
+        string clause,
+        RepoContext context,
+        IReadOnlyList<FindingCandidate>? upstreamFindings,
+        out bool result)
+    {
+        var sevMatch = FindingsSeverityComparisonRegex().Match(clause);
+        if (!sevMatch.Success)
+        {
+            result = false;
+            return false;
+        }
+
+        var sevOp = sevMatch.Groups["op"].Value;
+        var targetSevRank = SeverityRank(sevMatch.Groups["sev"].Value);
+        var cmpOp = sevMatch.Groups["cmpOp"].Value;
+        var rhs = double.Parse(sevMatch.Groups["rhs"].Value, CultureInfo.InvariantCulture);
+
+        var findings = upstreamFindings ?? context.UpstreamFindings ?? [];
+        var count = findings.Count(f =>
+        {
+            var rank = SeverityRank(f.Severity);
+            return sevOp switch
+            {
+                ">=" => rank >= targetSevRank,
+                ">" => rank > targetSevRank,
+                "==" => rank == targetSevRank,
+                _ => false
+            };
+        });
+
+        result = CompareNumbers(count, cmpOp, rhs);
+        return true;
+    }
+
+    private static bool TryEvaluateMetricComparisonClause(
+        string clause,
+        RepoContext context,
+        IReadOnlyList<FindingCandidate>? upstreamFindings,
+        out bool result)
+    {
+        var cmpMatch = NumericOrBoolComparisonRegex().Match(clause);
+        if (!cmpMatch.Success)
+        {
+            result = false;
+            return false;
+        }
+
+        var lhsName = cmpMatch.Groups["lhs"].Value;
+        var op = cmpMatch.Groups["op"].Value;
+        var rhsRaw = cmpMatch.Groups["rhs"].Value;
+
+        var lhsValue = ResolveMetricValue(lhsName, context, upstreamFindings);
+        if (bool.TryParse(rhsRaw, out var rhsBool))
+        {
+            var lhsBool = Math.Abs(lhsValue) > 0.0001;
+            result = op switch
+            {
+                "==" => lhsBool == rhsBool,
+                "!=" => lhsBool != rhsBool,
+                _ => false
+            };
+            return true;
+        }
+
+        if (double.TryParse(rhsRaw, NumberStyles.Any, CultureInfo.InvariantCulture, out var rhsNum))
+        {
+            result = CompareNumbers(lhsValue, op, rhsNum);
+            return true;
+        }
+
+        result = false;
         return false;
     }
 
