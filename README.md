@@ -1,7 +1,7 @@
 # GitGavel ⚖️
 
 > **Multi-Agent AI Repository Auditor & Backlog Sentinel**  
-> Powered by hybrid **System 2** (Generative Subagents) & **System 1** ([TypeSafe Jev](https://typesafe.ai) Decision Engine).
+> Powered by a reactive **System 1 + System 2 Workflow DAG**, **Declarative YAML Agents**, **On-Demand Skill Repositories**, **CI Pipeline Artifact Ingestion**, and **[TypeSafe Jev](https://typesafe.ai) + Deterministic / Fast-LLM Gates**.
 
 [![.NET 10](https://img.shields.io/badge/.NET-10.0-512BD4?logo=dotnet)](https://dotnet.microsoft.com/)
 [![TypeSafe Jev](https://img.shields.io/badge/Triage-TypeSafe%20Jev-blue)](https://typesafe.ai)
@@ -14,13 +14,23 @@
 
 Software repositories suffer from invisible technical debt: specification drift between documentation and code, creeping architectural complexity, and subtle security vulnerabilities that accumulate unnoticed.
 
-**GitGavel** acts as an autonomous backlog sentinel:
-1. **System 1 (TypeSafe Jev Decision Engine)**: Operates in two critical stages:
-   * **Pre-Execution Subagent Gating**: Evaluates lightweight PR/commit metadata in <250ms via Jev `Noul` to selectively activate only relevant subagents, slashing LLM token usage by up to 80%.
-   * **Post-Execution Finding & Closure Triage**: Gates findings through probabilistic decision intelligence—evaluating semantic deduplication (`Noul`), urgency/blast radius calibration (`Score` 1–5), issue resolution proof verification, and destination routing (`Choice`).
-2. **System 2 (Generative Discovery)**: Dispatches targeted LLM subagents in parallel to audit specification & README documentation divergence (`SpecDriftAgent`), static security advisories (`SecurityAuditor`), functional reliability & performance bottlenecks (`ReliabilityAgent`), Roslyn-analyzed architectural complexity (`RefactoringAgent`), automated test completeness across unit/integration/E2E tiers (`TestSentinelAgent`), and open issue completion (`IssueResolutionAgent`).
-3. **Developer Reporting Engine**: Emits 5 markdown reports, machine-readable JSON, sticky Pull Request summaries, and GitHub Actions step summaries.
-4. **GitHub Projects (v2) Automation**: Publishes deduplicated GitHub issues tagged with deterministic metadata comments, closes verified fixed issues, and updates Projects v2 Kanban boards via GraphQL.
+**GitGavel** acts as an autonomous, customizable backlog sentinel:
+1. **Reactive Workflow DAG & State Machine (`.gitgavel.workflow.yml`)**:
+   * Automatically resolves **parallel vs. series** execution across both **System 1** (gates/filters) and **System 2** (LLM subagents) using `inputsFrom` (wait + pass upstream findings) and `dependsOn` (wait for completion only, no findings passed).
+   * Enforces **bounded concurrency** (`maxParallelSteps`, `maxPerProvider`, `critical-path` scheduling) to prevent API rate-limiting (`HTTP 429`) and memory spikes.
+   * Renders a **Live Console Workflow & Agent Status Diagram** in real time (`⚪ Not Used`, `⏳ Waiting`, `🟢 Queued`, `⏭️ Skipped`, `🔄 Running`, `✅ Completed`, `❌ Failed`).
+2. **System 1 (Multi-Engine Gating & Post-Execution Triage)**:
+   * **Pre-Execution & Inter-Stage Gating**: Supports **Deterministic Rule & Artifact Gates** (`deterministic`), **Fast-LLM Gates** (`llm`), **TypeSafe Jev Gates** (`jev` via `Noul`), or **`deterministic-then-jev`** (default), slashing unnecessary LLM token usage by up to 80%.
+   * **Post-Execution Finding & Closure Triage**: Evaluates semantic deduplication (`Noul`), urgency/blast radius calibration (`Score` 1–5), issue resolution proof verification, and destination routing (`Choice`).
+3. **System 2 (Declarative YAML Standard & Custom Subagents)**:
+   * Standard subagents (`SpecDriftAgent`, `SecurityAuditor`, `ReliabilityAgent`, `RefactoringAgent`, `TestSentinelAgent`, `IssueResolutionAuditor`) and custom project-specific subagents are driven by unified declarative YAML definitions (`DeclarativeYamlAgent`).
+   * Eject and customize built-in agent prompts, scopes, and gates at any time with `gitgavel init --eject-agents`.
+4. **CI Pipeline Artifact Ingestion & On-Demand Agent Skills**:
+   * **Current Run Artifacts (`artifacts:`)**: Ingests `.trx`, `junit`, `cobertura`, `lcov`, `sarif`, and build log files from upstream CI jobs to give gates and agents concrete test failure, coverage, and static analysis evidence.
+   * **Multi-Repository Skills (`skills:`)**: Shallow-clones external or local skill repositories (`SKILL.md` playbooks) on-demand during pipeline execution and injects assigned skills into each agent's prompt.
+5. **Developer Reporting & GitHub Projects (v2) Automation**:
+   * Emits 5 markdown reports, machine-readable JSON, sticky Pull Request summaries, inline PR review comments, and GitHub Actions step summaries.
+   * Publishes deduplicated GitHub issues, closes verified fixed issues, and updates Projects v2 Kanban boards via GraphQL.
 
 ---
 
@@ -28,28 +38,28 @@ Software repositories suffer from invisible technical debt: specification drift 
 
 ```mermaid
 flowchart TD
-    subgraph Input["Repository Context"]
-        A["Source Code & AST"] 
+    subgraph Input["Repository, CI Artifacts & Skills Context"]
+        A["Source Code & Roslyn AST"] 
         B["Specs, README & Docs"]
-        C["SARIF Reports"]
+        C["SARIF, TRX Test Results & Cobertura Coverage"]
+        Skills["On-Demand Skill Repos (SKILL.md)"]
         Commits["Git History & Open Issues"]
     end
 
-    subgraph PreGating["System 1: Pre-Execution Subagent Gating (Jev Router)"]
-        JevGate["⚡ Jev Noul Gating Questions:\n'Should Spec / Security / Reliability / Refactor / Tests run?'"]
-        Safety["Deterministic Overrides:\nSARIF alerts > 0, spec/README edits, complexity churn, --all-agents"]
-        ActiveSubagents["Targeted Subagent Set\n(Slashing up to 80% token waste)"]
-        JevGate --> ActiveSubagents
-        Safety --> ActiveSubagents
-    end
-
-    subgraph System2["System 2: Generative Discovery"]
+    subgraph DAG["Reactive Workflow State Machine (.gitgavel.workflow.yml)"]
+        PreGate["System 1 Pre-Gate\n(Deterministic / Jev Noul / Fast-LLM)"]
         D["SpecDriftAgent"]
         E["SecurityAuditor"]
         Rel["ReliabilityAgent"]
         F["RefactoringAgent"]
         Test["TestSentinelAgent"]
-        Res["IssueResolutionAgent"]
+        MidGate["System 1 Inter-Stage Gate\n(inputsFrom: [security])"]
+        Custom["Custom YAML Agent\n(inputsFrom / dependsOn)"]
+        Res["IssueResolutionAuditor"]
+
+        PreGate -->|dependsOn| D & E & Rel & F & Test
+        E -->|inputsFrom (pass findings)| MidGate
+        MidGate -->|inputsFrom| Custom
     end
 
     subgraph PostTriage["System 1: Post-Execution Triage & Deduplication"]
@@ -61,21 +71,17 @@ flowchart TD
 
     subgraph Output["Actions & Developer Reports"]
         J["GitHub Issues + Projects v2"]
-        PR["PR Summary & Domain Reports"]
-        K["1_audit-run.md"]
+        PR["PR Summary & Inline Review"]
+        K["1_audit-run.md (with DAG Snapshot)"]
         L["2_tickets-report.md & .json"]
         M["3_security-report.md"]
         N["4_code-quality-report.md"]
         O["5_test-quality-report.md"]
     end
 
-    A --> JevGate
-    B --> JevGate
-    C --> JevGate
-    ActiveSubagents --> D & E & Rel & F & Test
+    A & B & C & Skills --> PreGate
     Commits --> Res
-
-    D & E & Rel & F & Test -->|Finding Candidates| G
+    D & E & Rel & F & Test & Custom -->|Finding Candidates| G
     Res -->|Closure Proofs| FixProof
     G -->|Novel Findings| H
     G -->|Duplicate Prob >= 0.85| Output
@@ -110,7 +116,7 @@ cp .env.example .env
 
 Edit `.env`:
 ```env
-# Required for live LLM subagents (Google Gemini 2.5)
+# Required for live LLM subagents (Google Gemini / OpenAI / Anthropic)
 GEMINI_API_KEY=your_gemini_api_key_here
 
 # Required for live System 1 Triage Gatekeeper (TypeSafe Jev)
@@ -132,8 +138,11 @@ dotnet run --project src/GitGavel -- audit --dry-run --mock
 # Offline subagents + live TypeSafe Jev triage
 dotnet run --project src/GitGavel -- audit --dry-run --mock-llm
 
-# Live execution against a target GitHub repository
-dotnet run --project src/GitGavel -- audit --repo owner/repo
+# Run with a custom workflow DAG and custom agents directory
+dotnet run --project src/GitGavel -- audit --workflow .gitgavel.workflow.yml --agents .gitgavel/agents
+
+# Eject built-in YAML agent definitions and workflow DAG for local customization
+dotnet run --project src/GitGavel -- init --eject-agents --eject-workflow
 ```
 
 ---
@@ -144,44 +153,64 @@ GitGavel provides three Spectre.Console-powered CLI verbs:
 
 | Command | Description |
 | :--- | :--- |
-| `audit` | Run full repository audit pipeline (System 2 discovery + System 1 Jev triage + reporting). |
-| `init` | Interactively scaffold a starter `.gitgavel.yml` configuration file. |
-| `validate` | Perform schema validation and test connectivity to Gemini, Jev, and GitHub APIs. |
+| `audit` | Run full repository audit pipeline (Workflow DAG execution + System 1 triage + reporting). |
+| `init` | Scaffold `.gitgavel.yml`, eject standard `*.agent.yml` prompts (`--eject-agents`), or eject `.gitgavel.workflow.yml` (`--eject-workflow`). |
+| `validate` | Validate `.gitgavel.yml`, workflow DAG topology (cycle/dependency checks), agent definitions, and API connectivity. |
 
 ### Command Options (`audit`)
 - `-c, --config <PATH>`: Path to `.gitgavel.yml` configuration file (default: `.gitgavel.yml`).
+- `-w, --workflow <PATH>`: Optional path to separate `.gitgavel.workflow.yml` DAG workflow definition file.
+- `--agents <PATH>`: Optional path to directory or file containing declarative `*.agent.yml` definitions.
+- `--max-concurrency <COUNT>`: Override maximum parallel System 2 workflow steps.
 - `-d, --dir <PATH>`: Target repository directory to audit (default: `.`).
 - `-r, --repo <OWNER/REPO>`: Target GitHub repository coordinates (e.g. `octocat/Hello-World`).
 - `--pr <NUMBER>`: Optional Pull Request number to audit for PR reviews and domain reports.
 - `--allow-external-paths`: Explicitly permit configuration, SARIF, or reporting paths outside the repository root.
-- `--all-agents, --no-gate`: Bypass Jev pre-execution subagent gating and execute all configured subagents unconditionally.
+- `--all-agents, --no-gate`: Bypass pre-execution subagent gating and execute all enabled subagents unconditionally.
 - `--dry-run`: Skip creating GitHub issues and modifying Projects v2 boards.
 - `--mock`: Run with simulated subagents and mock triage.
 - `--mock-llm`: Run with simulated subagents while keeping the live TypeSafe Jev decision engine active.
 
-### Real-Time Subagent Progress & Jev Gating Streaming
+### Command Options (`init`)
+- `-o, --output <PATH>`: Output path for generated `.gitgavel.yml`.
+- `--eject-agents`: Export standard built-in agent YAML files (`spec-drift.agent.yml`, `security.agent.yml`, `reliability.agent.yml`, `refactoring.agent.yml`, `test-sentinel.agent.yml`, `issue-resolution.agent.yml`) to `.gitgavel/agents/`.
+- `--eject-workflow`: Export the default `.gitgavel.workflow.yml` DAG definition to the repository root.
+- `-f, --force`: Overwrite existing configuration or ejected files.
 
-When running `gitgavel audit`, GitGavel uses TypeSafe Jev to evaluate PR and commit metadata before dispatch, dynamically activating only the subagents relevant to the changes. As subagents run concurrently, the CLI streams real-time progress, showing which agents were safely skipped, elapsed execution times, token counts, and token savings:
+---
+
+## Live Console Workflow & Agent Status Diagram
+
+During `gitgavel audit`, GitGavel renders a live DAG execution diagram showing every workflow stage grouped by topological level, concurrency slot utilization, dependency edges (`inputsFrom` vs. `dependsOn`), and real-time node statuses:
 
 ```text
-i Launching 5 System 2 Subagents concurrently: SpecDriftAgent, SecurityAuditor, ReliabilityAgent, RefactoringAgent, TestSentinelAgent...
-
-  ⏭️ SpecDriftAgent skipped: No specification files or API docs modified.
-  ✓ SecurityAuditor completed in 4.3s (2 findings, 610 tokens) — 3 still running: ReliabilityAgent, RefactoringAgent, TestSentinelAgent
-  ✓ ReliabilityAgent completed in 5.8s (1 finding, 430 tokens) — 2 still running: RefactoringAgent, TestSentinelAgent
-  ✓ RefactoringAgent completed in 8.2s (1 finding, 350 tokens) — 1 still running: TestSentinelAgent
-  ✓ TestSentinelAgent completed in 11.4s (3 findings, 1,200 tokens) — all subagents complete!
-
-✓ System 2 Discovery complete in 11.4s (Total Tokens: 2,590, Findings: 7)
-  ⚡ Jev Subagent Gating saved ~5,000 estimated tokens (1 subagent(s) skipped)
+╭─ GitGavel Workflow Execution DAG (Default Parallel Discovery Workflow) ──────────────────────╮
+│ Concurrency: 2 / 3 slots active | Completed: 2/7 | Running: 2 | Queued: 1 | Skipped: 1      │
+│                                                                                              │
+│ Level 0 (Root)                                                                               │
+│ └── ✅ Pre-Execution Subagent Gate [system1:deterministic-then-jev] (0.1s)                   │
+│                                                                                              │
+│ Level 1 (dependsOn: [pre-gate])                                                              │
+│ ├── ⏭️ SpecDriftAgent [system2:gemini-2.5-pro] — Skipped: No spec files modified             │
+│ ├── ✅ SecurityAuditor [system2:gemini-2.5-pro] (4.1s, 2 findings, 610 tok)                  │
+│ ├── 🔄 ReliabilityAgent [system2:gemini-3.1-pro-preview] (running 3.4s...)                   │
+│ ├── 🔄 RefactoringAgent [system2:gemini-2.5-flash] (running 3.4s...)                         │
+│ ├── 🟢 TestSentinelAgent [system2:gemini-2.5-pro] — Queued (waiting for concurrency slot)    │
+│ └── ⚪ IssueResolutionAuditor [system2:gemini-2.5-flash] — Not Used (disabled)               │
+╰──────────────────────────────────────────────────────────────────────────────────────────────╯
 ```
 
 ---
 
-## Configuration (`.gitgavel.yml`)
+## Configuration
+
+### 1. Main Configuration (`.gitgavel.yml`)
 
 ```yaml
 version: 1
+
+# Optional separate workflow DAG file (defaults to parallel fan-out if omitted)
+workflowFile: ".gitgavel.workflow.yml"
 
 scope:
   specs:
@@ -191,8 +220,6 @@ scope:
       - "Dockerfile"
       - "action.yml"
       - "docs/**/*.md"
-      - "specs/**/*.md"
-      - "api/openapi.json"
   source:
     include:
       - "**/*.cs"
@@ -207,12 +234,35 @@ scope:
     include:
       - "**/*.Tests/**"
       - "tests/**"
-      - "**/*.spec.*"
-      - "**/*.test.*"
+
+# Ingest current CI run artifacts (TRX, JUnit, Cobertura, LCOV, SARIF, Logs)
+artifacts:
+  enabled: true
+  sources:
+    - name: "dotnet-test-results"
+      type: "trx"
+      paths: ["artifacts/tests/**/*.trx"]
+    - name: "code-coverage"
+      type: "cobertura"
+      paths: ["artifacts/tests/**/coverage.cobertura.xml"]
+    - name: "sast-sarif"
+      type: "sarif"
+      paths: ["artifacts/sarif/*.sarif"]
+
+# Fetch external or local agent skills on-demand during pipeline execution
+skills:
+  enabled: true
+  cacheDir: ".gitgavel/cache/skills"
+  repositories:
+    - name: "org-skills"
+      url: "https://github.com/my-org/engineering-skills.git"
+      ref: "main"
+      paths: ["skills/dotnet-reliability", "skills/owasp-top-10"]
 
 subagents:
-  apiKeyEnv: "AI_API_KEY"
-  timeoutSeconds: 300                 # Request timeout for LLMs (default: 300s / 5 mins)
+  apiKeyEnv: "GEMINI_API_KEY"
+  timeoutSeconds: 300
+  definitionsPath: ".gitgavel/agents"   # Optional directory of *.agent.yml overrides & custom agents
   specDrift:
     enabled: true
     provider: "gemini"
@@ -221,11 +271,15 @@ subagents:
     enabled: true
     provider: "gemini"
     model: "gemini-2.5-pro"
-    sarifReports: ["reports/semgrep.sarif"]
+    sarifReports: ["artifacts/sarif/semgrep.sarif", "artifacts/sarif/trivy.sarif"]
+    artifacts: ["sast-sarif"]
+    skills: ["org-skills/owasp-top-10"]
   reliability:
-    enabled: true                     # Reliability & Performance Subagent
+    enabled: true
     provider: "gemini"
     model: "gemini-3.1-pro-preview"
+    artifacts: ["dotnet-test-results"]
+    skills: ["org-skills/dotnet-reliability"]
   refactoring:
     enabled: true
     provider: "gemini"
@@ -235,6 +289,7 @@ subagents:
     provider: "gemini"
     model: "gemini-2.5-pro"
     tiers: ["unit", "integration", "e2e"]
+    artifacts: ["dotnet-test-results", "code-coverage"]
   issueResolution:
     enabled: true
     provider: "gemini"
@@ -244,11 +299,11 @@ subagents:
 triage:
   engine: "jev"
   subagentGating:
-    enabled: true                     # Pre-screen subagents with Jev to reduce token usage
-    minConfidence: 0.50               # Minimum Jev Noul probability to activate subagent (default: 0.50)
-    alwaysRunSecurityOnSarifAlerts: true # Hard safety fallback: force SecurityAuditor if SARIF findings exist
-    alwaysRunSpecDriftOnSpecChanges: true # Hard safety fallback: force SpecDrift if specs/README modified
-    bypassInFullRepoMode: false       # Whether to bypass gating in full repo mode (default: false)
+    enabled: true
+    engine: "deterministic-then-jev"    # deterministic-then-jev | deterministic | jev | llm
+    minConfidence: 0.50
+    alwaysRunSecurityOnSarifAlerts: true
+    alwaysRunSpecDriftOnSpecChanges: true
   jev:
     apiKeyEnv: "JEV_API_KEY"
     thresholds:
@@ -257,42 +312,51 @@ triage:
       autoCloseIssueConfidence: 0.90
     dedupeWithNoul: true
   maxIssuesPerRun: 4
+```
 
-reporting:
-  outputDir: "./reports"
-  githubStepSummary: true
-  formats:
-    - "markdown"
-    - "json"
-  reports:
-    auditRun: true
-    tickets: true
-    security: true
-    codeQuality: true
-    testQuality: true
+### 2. Reactive Workflow DAG (`.gitgavel.workflow.yml`)
 
-github:
-  labels:
-    - "ai-backlog"
-  pullRequests:
-    enabled: true
-    onlyChangedFiles: true
-    auditExistingReviews: true
-    postSummaryComment: true
-    defaultReviewEvent: "COMMENT"
-  issueClosure:
-    enabled: true
-    stateReason: "completed"
-  projectsV2:
-    enabled: true
-    projectNumber: 2
-    columns:
-      backlog: "Backlog"
-      humanReview: "AI Triage"
-      done: "Done"
-      discard: "Discarded"
-    fields:
-      priority: "Priority"
+Define parallel and series stages across System 1 gates and System 2 agents:
+- **`inputsFrom: [nodeId]`**: Waits for upstream node(s) AND passes their `FindingCandidate` outputs into this stage.
+- **`dependsOn: [nodeId]`**: Waits for upstream node(s) to finish for ordering only, passing **no** findings into this stage.
+
+```yaml
+version: 1
+name: "Custom Parallel & Series Audit DAG"
+
+concurrency:
+  maxParallelSteps: 3
+  schedulingPolicy: "critical-path"
+  maxPerProvider:
+    gemini: 3
+
+nodes:
+  - id: "pre-gate"
+    name: "Pre-Execution Gate"
+    system: "system1"
+    engine: "deterministic-then-jev"
+    type: "subagent-gating"
+    passResults: true
+
+  - id: "security"
+    agent: "security"
+    system: "system2"
+    dependsOn: ["pre-gate"]
+    passResults: true
+
+  - id: "high-sev-filter"
+    name: "High Severity Filter"
+    system: "system1"
+    engine: "deterministic"
+    inputsFrom: ["security"]
+    condition: "inputs.findingsCount(severity >= 'High') > 0"
+    passResults: true
+
+  - id: "remediationVerifier"
+    agent: "remediationVerifier"
+    system: "system2"
+    inputsFrom: ["high-sev-filter"]    # Runs in series after security -> high-sev-filter with findings
+    passResults: true
 ```
 
 ---
@@ -301,59 +365,23 @@ github:
 
 Every audit run generates 5 structured developer reports in `./reports/`:
 
-1. **`1_audit-run.md`**: Executive summary, run duration, LOC scanned, token counts, Jev pre-execution gating diagnostics (activated vs skipped agents & token efficiency savings), and Jev triage funnel metrics.
-2. **`2_tickets-report.md` & `.json`**: Actionable tickets accepted to Backlog or routed to Review, with calibrated Jev urgency scores.
+1. **`1_audit-run.md`**: Executive summary, run duration, LOC scanned, token counts, Workflow DAG execution table (final status, level, dependencies, findings, and reasons for every node), pre-execution gating diagnostics, and triage funnel metrics.
+2. **`2_tickets-report.md` & `.json`**: Actionable tickets accepted to Backlog or routed to Review, with calibrated urgency scores.
 3. **`3_security-report.md`**: Security vulnerability catalog, OWASP classifications, attack vectors, and verified code remediations.
 4. **`4_code-quality-report.md`**: Spec drift catalog, reliability & performance analysis, Roslyn AST cyclomatic complexity hotspots, and refactoring catalog.
 5. **`5_test-quality-report.md`**: Test pyramid completeness across Unit, Integration, and E2E tiers with extra scenario recommendations.
 
 ---
 
-## GitHub Actions Automation
+## GitHub Actions CI & Audit Pipeline
 
-Run GitGavel automatically on a weekly schedule using the included action:
-
-```yaml
-# .github/workflows/audit.yml
-name: "Weekly AI Backlog Audit"
-
-on:
-  schedule:
-    - cron: '0 3 * * 1' # Every Monday at 03:00 UTC
-  workflow_dispatch:
-
-permissions:
-  issues: write
-  contents: read
-  repository-projects: write
-
-jobs:
-  audit:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Run GitGavel Sentinel
-        uses: ./
-        with:
-          config_path: .gitgavel.yml
-        env:
-          GH_TOKEN: ${{ secrets.GH_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || secrets.AI_API_KEY }}
-          AI_API_KEY: ${{ secrets.AI_API_KEY || secrets.GEMINI_API_KEY }}
-          JEV_API_KEY: ${{ secrets.JEV_API_KEY }}
-      - name: Upload Audit Reports
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: gitgavel-reports
-          path: ./reports/
-```
+In [`.github/workflows/ci.yml`](.github/workflows/ci.yml), `build-and-test` and `security-and-infra` run in parallel to produce `.trx` test results, Cobertura code coverage, and Roslyn/Semgrep/Trivy/Gitleaks/Hadolint SARIF artifacts. Once both jobs finish, the `audit` job downloads those evidence artifacts into `./artifacts/` and runs GitGavel.
 
 ---
 
 ## Testing
 
-Run the full xUnit test suite (155+ unit tests across all System 1 & System 2 subagents, reporters, and CLI pipelines):
+Run the full xUnit test suite (**288 unit & integration tests** covering workflow DAG state transitions, bounded concurrency, non-Jev gates, skill resolution, CI artifact ingestion, SARIF 1.0/2.1 parsing, declarative YAML agents, and reporters):
 ```bash
 dotnet test
 ```
