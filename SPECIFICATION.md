@@ -78,8 +78,8 @@ flowchart TD
         JevScore["Jev Score (1 - 5)\n'Calibrated Priority & Urgency'"]
         JevRoute["Jev Choice Routing\nRepo Mode: 'Backlog | Needs Review | Discard'\nPR Mode: 'IncludeInReview | Discard'"]
         
-        JevDedupe -->|Novel Finding| JevScore
-        JevVerifyFix -->|Confirmed Fixed| JevRoute
+        JevDedupe -->|"Novel Finding"| JevScore
+        JevVerifyFix -->|"Confirmed Fixed"| JevRoute
         JevScore --> JevRoute
     end
 
@@ -106,8 +106,8 @@ flowchart TD
     Scheduler <-->|"Dispatches & Routes inputsFrom"| StdAgents
     Scheduler <-->|"Dispatches & Routes inputsFrom"| CustomAgents
 
-    StdAgents -->|Candidate Findings & Closures| PostTriage
-    CustomAgents -->|Candidate Findings| PostTriage
+    StdAgents -->|"Candidate Findings & Closures"| PostTriage
+    CustomAgents -->|"Candidate Findings"| PostTriage
     JevRoute --> GH_Projects
     JevRoute --> GH_PR
     JevRoute --> ReportsEngine

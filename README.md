@@ -57,9 +57,9 @@ flowchart TD
         Custom["Custom YAML Agent\n(inputsFrom / dependsOn)"]
         Res["IssueResolutionAuditor"]
 
-        PreGate -->|dependsOn| D & E & Rel & F & Test
-        E -->|inputsFrom (pass findings)| MidGate
-        MidGate -->|inputsFrom| Custom
+        PreGate -->|"dependsOn"| D & E & Rel & F & Test
+        E -->|"inputsFrom (pass findings)"| MidGate
+        MidGate -->|"inputsFrom"| Custom
     end
 
     subgraph PostTriage["System 1: Post-Execution Triage & Deduplication"]
@@ -81,14 +81,14 @@ flowchart TD
 
     A & B & C & Skills --> PreGate
     Commits --> Res
-    D & E & Rel & F & Test & Custom -->|Finding Candidates| G
-    Res -->|Closure Proofs| FixProof
-    G -->|Novel Findings| H
-    G -->|Duplicate Prob >= 0.85| Output
-    FixProof -->|Verified Fixed| I
+    D & E & Rel & F & Test & Custom -->|"Finding Candidates"| G
+    Res -->|"Closure Proofs"| FixProof
+    G -->|"Novel Findings"| H
+    G -->|"Duplicate Prob >= 0.85"| Output
+    FixProof -->|"Verified Fixed"| I
     H --> I
-    I -->|Backlog / Needs Review| J
-    I -->|PR Mode Summary| PR
+    I -->|"Backlog / Needs Review"| J
+    I -->|"PR Mode Summary"| PR
     I --> Output
     H --> Output
 ```
